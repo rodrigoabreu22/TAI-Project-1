@@ -1,12 +1,12 @@
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <map>
-#include <cmath>
-#include <iomanip>
 #include <algorithm>
 #include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <limits>
+#include <map>
+#include <string>
+#include <vector>
 
 struct Statistics {
     long long original_size;
@@ -21,7 +21,7 @@ private:
     static const uint32_t HALF = 0x80000000u;
     static const uint32_t FIRST_QTR = 0x40000000u;
     static const uint32_t THIRD_QTR = 0xC0000000u;
-    
+
     struct Symbol {
         unsigned char value;
         uint64_t low;
@@ -38,10 +38,10 @@ private:
         for (unsigned char byte : data) {
             freq[byte]++;
         }
-        
+
         total_count = data.size();
         uint64_t cumulative = 0;
-        
+
         for (auto& [value, count] : freq) {
             symbols.push_back({value, cumulative, cumulative + static_cast<uint64_t>(count), static_cast<uint64_t>(count)});
             cumulative += count;
@@ -245,26 +245,22 @@ private:
 
 public:
     Statistics compress(const std::string& input_file, const std::string& output_file) {
-        // Read input file
         std::ifstream infile(input_file, std::ios::binary);
         if (!infile) {
             throw std::runtime_error("Cannot open input file");
         }
-        
+
         std::vector<unsigned char> data((std::istreambuf_iterator<char>(infile)),
                                         std::istreambuf_iterator<char>());
         infile.close();
-        
+
         long long original_size = data.size();
-        
-        // Build frequency table
+
         buildFrequencyTable(data);
-        
-        // Encode
+
         BitWriter writer;
         encodeData(data, writer);
-        
-        // Write output file
+
         std::ofstream outfile(output_file, std::ios::binary);
         if (!outfile) {
             throw std::runtime_error("Cannot create output file");
@@ -279,10 +275,10 @@ public:
 
         outfile.write(reinterpret_cast<const char*>(writer.bytes.data()), writer.bytes.size());
         outfile.close();
-        
+
         long long compressed_size = static_cast<long long>(writer.bytes.size()) +
                                     4 + 8 + 4 + static_cast<long long>(symbols.size()) * (1 + 8);
-        
+
         return {
             original_size,
             compressed_size,
@@ -337,34 +333,28 @@ public:
         std::cout << "\n=== Compression Statistics ===" << std::endl;
         std::cout << "Original size:     " << stats.original_size << " bytes" << std::endl;
         std::cout << "Compressed size:   " << stats.compressed_size << " bytes" << std::endl;
-        std::cout << "Compression ratio: " << std::fixed << std::setprecision(4) 
+        std::cout << "Compression ratio: " << std::fixed << std::setprecision(4)
                   << stats.compression_ratio * 100 << "%" << std::endl;
         std::cout << "Space saved:       " << stats.space_saved << " bytes ("
-                  << std::fixed << std::setprecision(2) 
+                  << std::fixed << std::setprecision(2)
                   << (1 - stats.compression_ratio) * 100 << "%)" << std::endl;
     }
 };
 
 int main(int argc, char* argv[]) {
-    if (argc != 3 && argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <input_file> <output_file>\n"
-                  << "   or: " << argv[0] << " -d <input_file> <output_file>" << std::endl;
+    if (argc != 3) {
+        std::cerr << "Usage: " << argv[0] << " <input_file> <output_file>" << std::endl;
         return 1;
     }
-    
+
     try {
         ArithmeticEncoder encoder;
-        if (argc == 4 && std::string(argv[1]) == "-d") {
-            encoder.decompress(argv[2], argv[3]);
-            std::cout << "Decompressed to: " << argv[3] << std::endl;
-        } else {
-            Statistics stats = encoder.compress(argv[1], argv[2]);
-            encoder.printStatistics(stats);
-        }
+        encoder.decompress(argv[1], argv[2]);
+        std::cout << "Decompressed to: " << argv[2] << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
-    
+
     return 0;
 }

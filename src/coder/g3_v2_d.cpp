@@ -506,40 +506,18 @@ void decompress_ari(string ifile, string ofile) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        if (argc < 4) {
-            cerr << "Too few arguments" << endl;
-        } else {
-            cerr << "Too many arguments" << endl;
-        }
-    } else {
-        if (strcmp(argv[1], "c") == 0) { //compress
-            compress_ari(argv[2], argv[3]);
-            try {
-                long long original = file_size(argv[2]);
-                long long compressed = file_size(argv[3]);
-                Statistics stats{
-                    original,
-                    compressed,
-                    original > 0 ? static_cast<double>(compressed) / original : 0.0,
-                    original - compressed
-                };
-
-                cout << "\n=== Compression Statistics ===" << endl;
-                cout << "Original size:     " << stats.original_size << " bytes" << endl;
-                cout << "Compressed size:   " << stats.compressed_size << " bytes" << endl;
-                cout << "Compression ratio: " << fixed << setprecision(4)
-                     << stats.compression_ratio * 100 << "%" << endl;
-                cout << "Space saved:       " << stats.space_saved << " bytes ("
-                     << fixed << setprecision(2)
-                     << (1 - stats.compression_ratio) * 100 << "%)" << endl;
-            } catch (const exception& e) {
-                cerr << "Warning: could not compute stats: " << e.what() << endl;
-            }
-        } else if (strcmp(argv[1], "d") == 0) { //decompress
-            decompress_ari(argv[2], argv[3]);
-        } else {
-            cerr << "Wrong 2 argument" << endl;
-        }
+    if (argc != 3) {
+        cerr << "Usage: " << argv[0] << " <input_file> <output_file>" << endl;
+        return 1;
     }
+
+    try {
+        decompress_ari(argv[1], argv[2]);
+        cout << "Decompressed to: " << argv[2] << endl;
+    } catch (const exception& e) {
+        cerr << "Error: " << e.what() << endl;
+        return 1;
+    }
+
+    return 0;
 }

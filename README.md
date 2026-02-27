@@ -1,15 +1,21 @@
 TAI - Project 1
 
-##  Run Encoders and Decoders
-
-### Encoder 1 (AI Generated)
+## Build Binaries
 ```bash
-./scripts/run_arithmetic_encoder_1.sh data/A
-./scripts/run_arithmetic_encoder_1.sh -d results/A.arith results/A.dec
+cmake -S . -B build
+cmake --build build -j
 ```
 
-### Encoder 2 (https://github.com/tazik/compressor/blob/master/compress.cpp)
+## Run Encoders and Decoders
+
+### Algorithm 1 (AI Generated)
 ```bash
-./scripts/run_arithmetic_encoder_2.sh data/A
-./scripts/run_arithmetic_encoder_2.sh -d results/A.arith2 results/A.dec
+./build/g3_v1_c data/A results/A.arith
+./build/g3_v1_d results/A.arith results/A.dec
+```
+
+### Algorithm 2 (https://github.com/tazik/compressor/blob/master/compress.cpp)
+```bash
+./build/g3_v2_c data/A results/A.arith2
+./build/g3_v2_d results/A.arith2 results/A.dec
 ```

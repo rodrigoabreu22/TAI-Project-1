@@ -13,17 +13,16 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Common source files (model, coder, io)
-file(GLOB_RECURSE LIB_SOURCES
-    src/model/*.cpp
-    src/coder/*.cpp
-    src/io/*.cpp
-)
+# Arithmetic encoder v1
+add_executable(g3_v1_c src/coder/g3_v1_c.cpp)
+target_include_directories(g3_v1_c PRIVATE src/coder)
 
-# Compressor executable
-add_executable(compress src/main_compress.cpp ${LIB_SOURCES})
-target_include_directories(compress PRIVATE src)
+add_executable(g3_v1_d src/coder/g3_v1_d.cpp)
+target_include_directories(g3_v1_d PRIVATE src/coder)
 
-# Decompressor executable
-add_executable(decompress src/main_decompress.cpp ${LIB_SOURCES})
-target_include_directories(decompress PRIVATE src)
+# Arithmetic encoder v2
+add_executable(g3_v2_c src/coder/g3_v2_c.cpp)
+target_include_directories(g3_v2_c PRIVATE src/coder)
+
+add_executable(g3_v2_d src/coder/g3_v2_d.cpp)
+target_include_directories(g3_v2_d PRIVATE src/coder)
