@@ -74,8 +74,8 @@ int main(int argc, char *argv[]) {
     // ── Read and validate header ──────────────────────────────────────────────
     char magic[4];
     in.read(magic, 4);
-    if (!in || magic[0] != 'T' || magic[1] != 'A' || magic[2] != 'I' || magic[3] != '3') {
-        std::cerr << "Error: not a TAI3 compressed file.\n";
+    if (!in || magic[0] != 'T' || magic[1] != 'A' || magic[2] != 'I' || magic[3] != '4') {
+        std::cerr << "Error: not a TAI4 compressed file.\n";
         return EXIT_FAILURE;
     }
 

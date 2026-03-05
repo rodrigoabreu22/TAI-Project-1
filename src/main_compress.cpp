@@ -7,9 +7,9 @@
  *
  * Coder:  Nayuki Reference Arithmetic Coding (MIT).
  *
- * Compressed file format (TAI3)
+ * Compressed file format (TAI4)
  * ─────────────────────────────
- *  Bytes 0-3   Magic "TAI3"
+ *  Bytes 0-3   Magic "TAI4"
  *  Byte  4     uint8_t MODEL_ORDER
  *  Byte  5     uint8_t k_raw  (0 = full 256-byte alphabet; 1-255 = k distinct bytes)
  *  Bytes 6..   k distinct byte values in sorted order  (omitted when k_raw == 0)
@@ -167,7 +167,7 @@ int main(int argc, char *argv[]) {
     std::ostream &out = (argc == 3) ? static_cast<std::ostream &>(file_out) : std::cout;
 
     // ── Write header ──────────────────────────────────────────────────────────
-    out.write("TAI3", 4);
+    out.write("TAI4", 4);
     out.put(static_cast<char>(static_cast<uint8_t>(MODEL_ORDER)));
 
     // k_raw: 0 means 256 (full alphabet, no bytes written); 1-255 = k < 256

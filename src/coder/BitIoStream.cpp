@@ -25,12 +25,16 @@ int BitInputStream::read() {
 		currentByte = input.get();
 		if (currentByte == std::char_traits<char>::eof())
 			return -1;
+#ifndef NDEBUG
 		if (!(0 <= currentByte && currentByte <= 255))
 			throw std::logic_error("Assertion error");
+#endif
 		numBitsRemaining = 8;
 	}
+#ifndef NDEBUG
 	if (numBitsRemaining <= 0)
 		throw std::logic_error("Assertion error");
+#endif
 	numBitsRemaining--;
 	return (currentByte >> numBitsRemaining) & 1;
 }
@@ -50,20 +54,6 @@ BitOutputStream::BitOutputStream(std::ostream &out) :
 	currentByte(0),
 	numBitsFilled(0) {}
 
-
-void BitOutputStream::write(int b) {
-	if (b != 0 && b != 1)
-		throw std::domain_error("Argument must be 0 or 1");
-	currentByte = (currentByte << 1) | b;
-	numBitsFilled++;
-	if (numBitsFilled == 8) {
-		if (std::numeric_limits<char>::is_signed)
-			currentByte -= (currentByte >> 7) << 8;
-		output.put(static_cast<char>(currentByte));
-		currentByte = 0;
-		numBitsFilled = 0;
-	}
-}
 
 
 void BitOutputStream::finish() {

@@ -60,6 +60,9 @@ void PpmModel::incrementContexts(const std::deque<uint32_t> &history, uint32_t s
         throw std::invalid_argument("Illegal argument");
 
     Context *ctx = rootContext.get();
+    // PPMC: bump escape count on first occurrence of symbol in this context.
+    if (ctx->frequencies.get(symbol) == 0)
+        ctx->frequencies.increment(escapeSymbol);
     ctx->frequencies.increment(symbol);
 
     std::size_t i = 0;
@@ -77,6 +80,9 @@ void PpmModel::incrementContexts(const std::deque<uint32_t> &history, uint32_t s
             ++nodeCount;
         }
         ctx = subctx.get();
+        // PPMC: bump escape count on first occurrence of symbol in this context.
+        if (ctx->frequencies.get(symbol) == 0)
+            ctx->frequencies.increment(escapeSymbol);
         ctx->frequencies.increment(symbol);
         i++;
     }

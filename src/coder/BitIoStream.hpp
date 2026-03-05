@@ -9,6 +9,7 @@
 #pragma once
 
 #include <istream>
+#include <limits>
 #include <ostream>
 
 
@@ -45,8 +46,18 @@ class BitOutputStream final {
 
 	public: explicit BitOutputStream(std::ostream &out);
 
-	// Writes a single bit (must be 0 or 1).
-	public: void write(int b);
+	// Writes a single bit (0 or 1). Inlined for performance — called ~73M times.
+	public: inline void write(int b) {
+		currentByte = (currentByte << 1) | b;
+		numBitsFilled++;
+		if (numBitsFilled == 8) {
+			if (std::numeric_limits<char>::is_signed)
+				currentByte -= (currentByte >> 7) << 8;
+			output.put(static_cast<char>(currentByte));
+			currentByte = 0;
+			numBitsFilled = 0;
+		}
+	}
 
 	// Flushes remaining bits with zero padding to reach a byte boundary.
 	public: void finish();

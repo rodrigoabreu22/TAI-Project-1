@@ -32,11 +32,15 @@ ArithmeticCoderBase::~ArithmeticCoderBase() {}
 
 
 void ArithmeticCoderBase::update(const FrequencyTable &freqs, uint32_t symbol) {
+#ifndef NDEBUG
 	if (low >= high || (low & stateMask) != low || (high & stateMask) != high)
 		throw std::logic_error("Assertion error: Low or high out of range");
+#endif
 	uint64_t range = high - low + 1;
+#ifndef NDEBUG
 	if (!(minimumRange <= range && range <= fullRange))
 		throw std::logic_error("Assertion error: Range out of range");
+#endif
 
 	uint32_t total  = freqs.getTotal();
 	uint32_t symLow = freqs.getLow(symbol);
@@ -80,21 +84,27 @@ uint32_t ArithmeticDecoder::read(const FrequencyTable &freqs) {
 	uint64_t range  = high - low + 1;
 	uint64_t offset = code - low;
 	uint64_t value  = ((offset + 1) * total - 1) / range;
+#ifndef NDEBUG
 	if (value * range / total > offset)
 		throw std::logic_error("Assertion error");
 	if (value >= total)
 		throw std::logic_error("Assertion error");
+#endif
 
 	// O(log N) symbol lookup via virtual findSymbol().
 	// FenwickFrequencyTable overrides this with a single Fenwick-tree descent,
 	// replacing the previous O(log^2 N) binary-search + getLow loop.
 	uint32_t symbol = freqs.findSymbol(static_cast<uint32_t>(value));
+#ifndef NDEBUG
 	if (!(freqs.getLow(symbol) * range / total <= offset &&
 	      offset < freqs.getHigh(symbol) * range / total))
 		throw std::logic_error("Assertion error");
+#endif
 	update(freqs, symbol);
+#ifndef NDEBUG
 	if (!(low <= code && code <= high))
 		throw std::logic_error("Assertion error: Code out of range");
+#endif
 	return symbol;
 }
 
