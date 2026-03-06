@@ -39,6 +39,7 @@
 #include "coder/ArithmeticCoder.hpp"
 #include "coder/BitIoStream.hpp"
 #include "model/BwtTransform.hpp"
+#include "model/RleTransform.hpp"
 #include "model/PpmModel.hpp"
 
 static void encodeSymbol(PpmModel &model,
@@ -101,13 +102,19 @@ int main(int argc, char *argv[]) {
     raw_data.clear();
     raw_data.shrink_to_fit();
 
-    // ── Scan BWT output: build compact alphabet and compute H₀ ────────────────
+    // ── RLE of BWT output ─────────────────────────────────────────────────────
+    auto runs = rle_encode(bwt_data);
+    bwt_data.clear();
+    bwt_data.shrink_to_fit();
+
+    // ── Scan BWT byte distribution (from runs): build compact alphabet and H₀ ─
     bool seen[256] = {};
     long long byte_counts[256] = {};
-    long long total_bytes = static_cast<long long>(bwt_data.size());
-    for (uint8_t b : bwt_data) {
-        seen[b] = true;
-        byte_counts[b]++;
+    long long total_bytes = 0;
+    for (auto& [sym, cnt] : runs) {
+        seen[sym] = true;
+        byte_counts[sym] += static_cast<long long>(cnt);
+        total_bytes     += static_cast<long long>(cnt);
     }
 
     double h0 = 0.0;
@@ -162,8 +169,8 @@ int main(int argc, char *argv[]) {
     }
     std::ostream &out = (argc >= 3) ? static_cast<std::ostream &>(file_out) : std::cout;
 
-    // ── Write header (TAI5) ───────────────────────────────────────────────────
-    out.write("TAI5", 4);
+    // ── Write header (TAI6) ───────────────────────────────────────────────────
+    out.write("TAI6", 4);
     out.put(static_cast<char>(static_cast<uint8_t>(MODEL_ORDER)));
 
     uint8_t k_raw = (k == 256u) ? 0u : static_cast<uint8_t>(k);
@@ -179,26 +186,41 @@ int main(int argc, char *argv[]) {
     out.put(static_cast<char>((pi >> 16) & 0xFF));
     out.put(static_cast<char>((pi >> 24) & 0xFF));
 
-    // ── Encode BWT output via PPM + arithmetic coder ──────────────────────────
+    // ── Encode run symbols + counts in one interleaved arithmetic stream ────────
+    // Per run: encode symbol via PPM, then encode count via Elias-gamma.
+    //   count n ≥ 1:  b = floor(log2(n)) via adaptive 32-symbol model,
+    //                 then b residual bits via flat 2-symbol model.
     try {
         PpmModel model(MODEL_ORDER, k + 1, k, NODE_LIMIT);
+        std::vector<std::uint32_t> exp_init(32, 1);
+        SimpleFrequencyTable exp_model(exp_init);
+        std::vector<std::uint32_t> bit_init(2, 1);
+        SimpleFrequencyTable bit_model(bit_init);
         BitOutputStream bos(out);
         ArithmeticEncoder enc(32, bos);
         std::deque<std::uint32_t> history;
 
-        for (uint8_t b : bwt_data) {
-            std::uint32_t sym = encode_map[b];
-            encodeSymbol(model, history, sym, enc);
-            model.incrementContexts(history, sym);
+        for (auto& [sym, cnt] : runs) {
+            std::uint32_t s = encode_map[sym];
+            encodeSymbol(model, history, s, enc);
+            model.incrementContexts(history, s);
 
             if (MODEL_ORDER >= 1) {
                 if (history.size() >= static_cast<std::size_t>(MODEL_ORDER))
                     history.pop_back();
-                history.push_front(sym);
+                history.push_front(s);
             }
+
+            // Elias-gamma for count
+            int b = 31 - __builtin_clz(cnt);  // floor(log2(cnt)); safe since cnt >= 1
+            enc.write(exp_model, static_cast<std::uint32_t>(b));
+            exp_model.increment(static_cast<std::uint32_t>(b));
+            std::uint32_t residual = cnt - (1u << b);
+            for (int i = b - 1; i >= 0; i--)
+                enc.write(bit_model, (residual >> i) & 1u);
         }
 
-        encodeSymbol(model, history, k, enc);  // EOF marker = escapeSymbol
+        encodeSymbol(model, history, k, enc);  // EOF marker
         enc.finish();
         bos.finish();
 

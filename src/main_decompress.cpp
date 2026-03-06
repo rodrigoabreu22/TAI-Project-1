@@ -24,7 +24,9 @@
 
 #include "coder/ArithmeticCoder.hpp"
 #include "coder/BitIoStream.hpp"
+#include "coder/FrequencyTable.hpp"
 #include "model/BwtTransform.hpp"
+#include "model/RleTransform.hpp"
 #include "model/PpmModel.hpp"
 
 
@@ -77,8 +79,8 @@ int main(int argc, char *argv[]) {
     // ── Read and validate header ──────────────────────────────────────────────
     char magic[4];
     in.read(magic, 4);
-    if (!in || magic[0] != 'T' || magic[1] != 'A' || magic[2] != 'I' || magic[3] != '5') {
-        std::cerr << "Error: not a TAI5 compressed file.\n";
+    if (!in || magic[0] != 'T' || magic[1] != 'A' || magic[2] != 'I' || magic[3] != '6') {
+        std::cerr << "Error: not a TAI6 compressed file.\n";
         return EXIT_FAILURE;
     }
 
@@ -139,10 +141,14 @@ int main(int argc, char *argv[]) {
     }
     std::ostream &out = (argc == 3) ? static_cast<std::ostream &>(file_out) : std::cout;
 
-    // ── Decode PPM bitstream into BWT buffer ──────────────────────────────────
+    // ── Decode interleaved (symbol, count) stream → BWT buffer ───────────────
     std::vector<uint8_t> bwt_buf;
     try {
         PpmModel model(model_order, k + 1, k, NODE_LIMIT);
+        std::vector<std::uint32_t> exp_init(32, 1);
+        SimpleFrequencyTable exp_model(exp_init);
+        std::vector<std::uint32_t> bit_init(2, 1);
+        SimpleFrequencyTable bit_model(bit_init);
         BitInputStream bis(in);
         ArithmeticDecoder dec(32, bis);
         std::deque<std::uint32_t> history;
@@ -152,14 +158,24 @@ int main(int argc, char *argv[]) {
             if (sym == k)
                 break;  // EOF marker
 
-            bwt_buf.push_back(alphabet[sym]);
             model.incrementContexts(history, sym);
-
             if (model_order >= 1) {
                 if (history.size() >= static_cast<std::size_t>(model_order))
                     history.pop_back();
                 history.push_front(sym);
             }
+
+            // Elias-gamma decode for count
+            std::uint32_t b = dec.read(exp_model);
+            exp_model.increment(b);
+            std::uint32_t residual = 0;
+            for (std::uint32_t j = 0; j < b; j++)
+                residual = (residual << 1) | dec.read(bit_model);
+            std::uint32_t cnt = (1u << b) | residual;
+
+            uint8_t byte = alphabet[sym];
+            for (std::uint32_t j = 0; j < cnt; j++)
+                bwt_buf.push_back(byte);
         }
 
     } catch (const std::exception &e) {
