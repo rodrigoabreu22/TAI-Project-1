@@ -26,3 +26,10 @@ target_include_directories(g3_v2_c PRIVATE src/coder)
 
 add_executable(g3_v2_d src/coder/g3_v2_d.cpp)
 target_include_directories(g3_v2_d PRIVATE src/coder)
+
+# rANS encoder/decoder (based on rygorous/ryg_rans)
+add_executable(g3_v3_c src/coder/g3_v3_c.cpp)
+target_include_directories(g3_v3_c PRIVATE src/coder)
+
+add_executable(g3_v3_d src/coder/g3_v3_d.cpp)
+target_include_directories(g3_v3_d PRIVATE src/coder)
