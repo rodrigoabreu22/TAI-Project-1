@@ -36,8 +36,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "coder/ArithmeticCoder.hpp"
-#include "coder/BitIoStream.hpp"
+#include "coder/RangeCoder.hpp"
 #include "model/BwtTransform.hpp"
 #include "model/RleTransform.hpp"
 #include "model/PpmModel.hpp"
@@ -45,7 +44,7 @@
 static void encodeSymbol(PpmModel &model,
                          const std::deque<std::uint32_t> &history,
                          std::uint32_t symbol,
-                         ArithmeticEncoder &enc)
+                         RangeEncoder &enc)
 {
     for (int order = static_cast<int>(history.size()); order >= 0; order--) {
         PpmModel::Context *ctx = model.rootContext.get();
@@ -196,8 +195,7 @@ int main(int argc, char *argv[]) {
         SimpleFrequencyTable exp_model(exp_init);
         std::vector<std::uint32_t> bit_init(2, 1);
         SimpleFrequencyTable bit_model(bit_init);
-        BitOutputStream bos(out);
-        ArithmeticEncoder enc(32, bos);
+        RangeEncoder enc(out);
         std::deque<std::uint32_t> history;
 
         for (auto& [sym, cnt] : runs) {
@@ -222,7 +220,6 @@ int main(int argc, char *argv[]) {
 
         encodeSymbol(model, history, k, enc);  // EOF marker
         enc.finish();
-        bos.finish();
 
     } catch (const std::exception &e) {
         std::cerr << "Encoding error: " << e.what() << "\n";

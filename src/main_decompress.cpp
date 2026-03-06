@@ -22,15 +22,14 @@
 #include <stdexcept>
 #include <vector>
 
-#include "coder/ArithmeticCoder.hpp"
-#include "coder/BitIoStream.hpp"
+#include "coder/RangeCoder.hpp"
 #include "coder/FrequencyTable.hpp"
 #include "model/BwtTransform.hpp"
 #include "model/RleTransform.hpp"
 #include "model/PpmModel.hpp"
 
 
-static std::uint32_t decodeSymbol(ArithmeticDecoder &dec,
+static std::uint32_t decodeSymbol(RangeDecoder &dec,
                                   PpmModel &model,
                                   const std::deque<std::uint32_t> &history)
 {
@@ -149,8 +148,7 @@ int main(int argc, char *argv[]) {
         SimpleFrequencyTable exp_model(exp_init);
         std::vector<std::uint32_t> bit_init(2, 1);
         SimpleFrequencyTable bit_model(bit_init);
-        BitInputStream bis(in);
-        ArithmeticDecoder dec(32, bis);
+        RangeDecoder dec(in);
         std::deque<std::uint32_t> history;
 
         while (true) {
