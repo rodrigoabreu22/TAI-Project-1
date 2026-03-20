@@ -20,10 +20,14 @@ file(GLOB_RECURSE LIB_SOURCES
     src/io/*.cpp
 )
 
+find_package(Threads REQUIRED)
+
 # Compressor executable
 add_executable(compress src/main_compress.cpp ${LIB_SOURCES})
 target_include_directories(compress PRIVATE src)
+target_link_libraries(compress PRIVATE Threads::Threads)
 
 # Decompressor executable
 add_executable(decompress src/main_decompress.cpp ${LIB_SOURCES})
 target_include_directories(decompress PRIVATE src)
+target_link_libraries(decompress PRIVATE Threads::Threads)
