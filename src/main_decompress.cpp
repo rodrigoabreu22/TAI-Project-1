@@ -1,12 +1,5 @@
 /*
- * TAI Project 1 — PPM Arithmetic Decompressor (BWT whole-file + parallel PPM chunks)
- *
- * Pipeline:
- *   1. Read TAI7 global header: primary_index, num_chunks.
- *   2. Read all chunk headers + bitstreams into memory.
- *   3. Decode each chunk in parallel: PPM decode → RLE expand → BWT bytes.
- *   4. Assemble all BWT bytes in order → full bwt_buf.
- *   5. BWT inverse (whole file) → original data.
+ * TAI Project 1 — MTF+ORDER=0 Decompressor (BWT whole-file + parallel MTF chunks)
  *
  * Usage:  decompress <compressed_file> <output_file>
  *         decompress          (stdin → stdout)
@@ -15,53 +8,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <numeric>
 #include <sstream>
-#include <stdexcept>
 #include <vector>
 
 #include "coder/RangeCoder.hpp"
 #include "coder/FrequencyTable.hpp"
+#include "coder/FenwickFrequencyTable.hpp"
 #include "model/BwtTransform.hpp"
 #include "model/RleTransform.hpp"
-#include "model/PpmModel.hpp"
-
-
-// ── PPM symbol decoder ────────────────────────────────────────────────────────
-static std::uint32_t decodeSymbol(RangeDecoder &dec,
-                                  PpmModel &model,
-                                  const std::deque<std::uint32_t> &history)
-{
-    for (int order = static_cast<int>(history.size()); order >= 0; order--) {
-        PpmModel::Context *ctx = model.rootContext.get();
-
-        for (int i = 0; i < order; i++) {
-            if (!ctx->hasSubctx)
-                throw std::logic_error("Assertion error");
-            ctx = ctx->subcontexts.at(history.at(static_cast<std::size_t>(i))).get();
-            if (ctx == nullptr)
-                goto nextOrder;
-        }
-
-        {
-            std::uint32_t sym = dec.read(ctx->frequencies);
-            if (sym != model.escapeSymbol)
-                return sym;
-        }
-
-        nextOrder:;
-    }
-
-    return dec.read(model.orderMinus1Freqs);
-}
 
 
 // ── Per-chunk data ────────────────────────────────────────────────────────────
 struct ChunkData {
-    int                  model_order;
     uint32_t             k;
     std::vector<uint8_t> alphabet;
     std::vector<uint8_t> bitstream;
@@ -71,50 +33,45 @@ struct ChunkData {
 // ── Decode one chunk → portion of bwt_data (runs in a worker thread) ─────────
 static std::vector<uint8_t> decompress_chunk(const ChunkData &cd)
 {
-    std::size_t NODE_LIMIT;
-    {
-        std::size_t node_bytes = static_cast<std::size_t>(cd.k + 1) * 12 + 80;
-        constexpr std::size_t TARGET = 6ULL * 1024 * 1024 * 1024;
-        NODE_LIMIT = std::min(TARGET / node_bytes, std::size_t(8'000'000));
-        NODE_LIMIT = std::max(NODE_LIMIT, std::size_t(2'000'000));
-    }
+    // MTF list: [0, 1, ..., k-1]
+    std::vector<uint32_t> mtf_list(cd.k);
+    std::iota(mtf_list.begin(), mtf_list.end(), 0u);
+
+    // Same models as compressor — Fenwick for O(log k) findSymbol
+    FenwickFrequencyTable rank_model(cd.k + 1);
+    for (uint32_t i = 0; i <= cd.k; i++) rank_model.increment(i);
+    std::vector<uint32_t> exp_init(32, 1u);
+    SimpleFrequencyTable  exp_model(exp_init);
+    std::vector<uint32_t> bit_init(2, 1u);
+    SimpleFrequencyTable  bit_model(bit_init);
 
     std::string raw(cd.bitstream.begin(), cd.bitstream.end());
     std::istringstream buf(raw, std::ios::binary);
+    RangeDecoder dec(buf);
 
     std::vector<uint8_t> bwt_portion;
-    {
-        PpmModel model(cd.model_order, cd.k + 1, cd.k, NODE_LIMIT);
-        std::vector<std::uint32_t> exp_init(32, 1);
-        SimpleFrequencyTable exp_model(exp_init);
-        std::vector<std::uint32_t> bit_init(2, 1);
-        SimpleFrequencyTable bit_model(bit_init);
-        RangeDecoder dec(buf);
-        std::deque<std::uint32_t> history;
 
-        while (true) {
-            std::uint32_t sym = decodeSymbol(dec, model, history);
-            if (sym == cd.k)
-                break;  // EOF marker
+    while (true) {
+        uint32_t r = dec.read(rank_model);
+        if (r == cd.k) break;  // EOF marker
+        rank_model.increment(r);
 
-            model.incrementContexts(history, sym);
-            if (cd.model_order >= 1) {
-                if (history.size() >= static_cast<std::size_t>(cd.model_order))
-                    history.pop_back();
-                history.push_front(sym);
-            }
+        // Recover symbol at rank r, move to front
+        uint32_t sym = mtf_list[r];
+        for (uint32_t i = r; i > 0; i--) mtf_list[i] = mtf_list[i - 1];
+        mtf_list[0] = sym;
 
-            std::uint32_t b = dec.read(exp_model);
-            exp_model.increment(b);
-            std::uint32_t residual = 0;
-            for (std::uint32_t j = 0; j < b; j++)
-                residual = (residual << 1) | dec.read(bit_model);
-            std::uint32_t cnt = (1u << b) | residual;
+        // Decode count (Elias-gamma)
+        uint32_t b = dec.read(exp_model);
+        exp_model.increment(b);
+        uint32_t residual = 0;
+        for (uint32_t j = 0; j < b; j++)
+            residual = (residual << 1) | dec.read(bit_model);
+        uint32_t cnt = (1u << b) | residual;
 
-            uint8_t byte = cd.alphabet[sym];
-            for (std::uint32_t j = 0; j < cnt; j++)
-                bwt_portion.push_back(byte);
-        }
+        uint8_t byte = cd.alphabet[sym];
+        for (uint32_t j = 0; j < cnt; j++)
+            bwt_portion.push_back(byte);
     }
 
     return bwt_portion;
@@ -176,12 +133,11 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
-        int mo = static_cast<int>(static_cast<uint8_t>(in.get()));
+        in.get();  // MODEL_ORDER placeholder (unused)
         if (!in) {
-            std::cerr << "Error: truncated MODEL_ORDER (chunk " << i << ").\n";
+            std::cerr << "Error: truncated header (chunk " << i << ").\n";
             return EXIT_FAILURE;
         }
-        cd.model_order = mo;
 
         uint32_t k_raw = static_cast<uint8_t>(in.get());
         if (!in) {
@@ -218,7 +174,7 @@ int main(int argc, char *argv[]) {
     for (const auto &cd : chunks)
         futures.push_back(std::async(std::launch::async, decompress_chunk, cd));
 
-    // ── Assemble full bwt_buf from chunk portions in order ────────────────────
+    // ── Assemble full bwt_buf in order ────────────────────────────────────────
     std::vector<uint8_t> bwt_buf;
     for (auto &f : futures) {
         std::vector<uint8_t> portion = f.get();
