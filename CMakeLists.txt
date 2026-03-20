@@ -14,7 +14,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Common source files (model, coder, io)
-file(GLOB_RECURSE LIB_SOURCES
+file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS
     src/model/*.cpp
     src/coder/*.cpp
     src/io/*.cpp
@@ -23,6 +23,14 @@ file(GLOB_RECURSE LIB_SOURCES
 # Compressor executable
 add_executable(compress src/main_compress.cpp ${LIB_SOURCES})
 target_include_directories(compress PRIVATE src)
+
+# Ratio-focused compressor executable
+add_executable(compress_ratio src/main_compress_ratio.cpp ${LIB_SOURCES})
+target_include_directories(compress_ratio PRIVATE src)
+
+# Ratio-focused decompressor executable
+add_executable(decompress_ratio src/main_decompress_ratio.cpp ${LIB_SOURCES})
+target_include_directories(decompress_ratio PRIVATE src)
 
 # Decompressor executable
 add_executable(decompress src/main_decompress.cpp ${LIB_SOURCES})
