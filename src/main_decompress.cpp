@@ -40,10 +40,17 @@ static std::vector<uint8_t> decompress_chunk(const ChunkData &cd)
     // Same models as compressor — Fenwick for O(log k) findSymbol
     FenwickFrequencyTable rank_model(cd.k + 1);
     for (uint32_t i = 0; i <= cd.k; i++) rank_model.increment(i);
+    constexpr uint32_t COUNT_CTXS = 4;
+    auto rank_ctx = [](uint32_t r) -> uint32_t {
+        if (r == 0) return 0;
+        if (r == 1) return 1;
+        if (r <= 3) return 2;
+        return 3;
+    };
     std::vector<uint32_t> exp_init(32, 1u);
-    SimpleFrequencyTable  exp_model(exp_init);
+    std::vector<SimpleFrequencyTable> exp_models(COUNT_CTXS, SimpleFrequencyTable(exp_init));
     std::vector<uint32_t> bit_init(2, 1u);
-    SimpleFrequencyTable  bit_model(bit_init);
+    std::vector<SimpleFrequencyTable> bit_models(COUNT_CTXS, SimpleFrequencyTable(bit_init));
 
     std::string raw(cd.bitstream.begin(), cd.bitstream.end());
     std::istringstream buf(raw, std::ios::binary);
@@ -61,12 +68,13 @@ static std::vector<uint8_t> decompress_chunk(const ChunkData &cd)
         for (uint32_t i = r; i > 0; i--) mtf_list[i] = mtf_list[i - 1];
         mtf_list[0] = sym;
 
-        // Decode count (Elias-gamma)
-        uint32_t b = dec.read(exp_model);
-        exp_model.increment(b);
+        // Decode count (Elias-gamma), conditioned on rank bucket
+        uint32_t ctx = rank_ctx(r);
+        uint32_t b = dec.read(exp_models[ctx]);
+        exp_models[ctx].increment(b);
         uint32_t residual = 0;
         for (uint32_t j = 0; j < b; j++)
-            residual = (residual << 1) | dec.read(bit_model);
+            residual = (residual << 1) | dec.read(bit_models[ctx]);
         uint32_t cnt = (1u << b) | residual;
 
         uint8_t byte = cd.alphabet[sym];

@@ -9,6 +9,12 @@
  *   primary_index from the SA.
  *
  * Inverse: LF-mapping — O(N).
+ *
+ * Optimisations vs original:
+ *   - Type array uses uint8_t instead of std::vector<bool> (avoids bit-packing
+ *     overhead on random access in induceSA — direct byte loads instead).
+ *   - getBuckets result reused across induceSA calls (4 fewer full-string scans
+ *     per SA-IS level).
  */
 
 #include <algorithm>
@@ -31,10 +37,11 @@ inline void getBuckets(const std::vector<int32_t>& s,
 }
 
 // Induce L-type (left→right) then S-type (right→left) entries into SA.
+// Takes pre-computed bucket arrays to avoid recomputing them internally.
 inline void induceSA(const std::vector<int32_t>& s, std::vector<int32_t>& SA,
-                     const std::vector<bool>& t, int alpha) {
+                     const std::vector<uint8_t>& t, int alpha,
+                     std::vector<int32_t>& bkt) {
     int n = static_cast<int>(s.size());
-    std::vector<int32_t> bkt(alpha);
 
     // L-type: scan left→right; if SA[i]-1 is L-type, place it at bucket head
     getBuckets(s, bkt, alpha, false);
@@ -61,10 +68,11 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
     if (n == 1) { SA[0] = 0; return; }
 
     // ── Step 1: classify S/L types ───────────────────────────────────────────
-    // t[i] = true  → S-type (suffix[i] < suffix[i+1])
-    // t[i] = false → L-type (suffix[i] > suffix[i+1])
-    std::vector<bool> t(n, false);
-    t[n - 1] = true;  // sentinel is always S-type (smallest)
+    // t[i] = 1 → S-type (suffix[i] < suffix[i+1])
+    // t[i] = 0 → L-type (suffix[i] > suffix[i+1])
+    // uint8_t avoids std::vector<bool> bit-packing overhead on random access.
+    std::vector<uint8_t> t(n, 0);
+    t[n - 1] = 1;  // sentinel is always S-type (smallest)
     for (int i = n - 2; i >= 0; i--)
         t[i] = (s[i] < s[i + 1]) || (s[i] == s[i + 1] && t[i + 1]);
 
@@ -77,15 +85,17 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
         if (isLMS(i)) lmsPos.push_back(i);
     int n1 = static_cast<int>(lmsPos.size());
 
+    // Shared bucket buffer — reused across getBuckets calls to avoid reallocation
+    std::vector<int32_t> bkt(alpha);
+
     // ── Step 2: approximate SA via initial induced sort ──────────────────────
     {
-        std::vector<int32_t> bkt(alpha);
         getBuckets(s, bkt, alpha, true);  // tails
         // Place LMS suffixes at the tail of their character buckets
         for (int i = n1 - 1; i >= 0; i--)
             SA[bkt[s[lmsPos[i]]]--] = lmsPos[i];
     }
-    induceSA(s, SA, t, alpha);
+    induceSA(s, SA, t, alpha, bkt);
 
     // ── Step 3: name LMS substrings ──────────────────────────────────────────
     // Two LMS substrings are equal iff they have the same sequence of
@@ -132,12 +142,11 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
 
     SA.assign(n, -1);
     {
-        std::vector<int32_t> bkt(alpha);
         getBuckets(s, bkt, alpha, true);  // tails
         for (int i = n1 - 1; i >= 0; i--)
             SA[bkt[s[sortedLms[i]]]--] = sortedLms[i];
     }
-    induceSA(s, SA, t, alpha);
+    induceSA(s, SA, t, alpha, bkt);
 }
 
 } // namespace detail

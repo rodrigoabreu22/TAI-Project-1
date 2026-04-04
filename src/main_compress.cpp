@@ -81,14 +81,25 @@ static ChunkResult compress_chunk(
     std::iota(mtf_list.begin(), mtf_list.end(), 0u);
 
     // ── Adaptive ORDER=0 model for MTF ranks: symbols 0..k-1 + k as EOF ──────
-    FenwickFrequencyTable rank_model(k + 1);  // O(log k) findSymbol vs O(k) for Simple
-    for (uint32_t i = 0; i <= k; i++) rank_model.increment(i);  // init all freqs to 1
+    FenwickFrequencyTable rank_model(k + 1);
+    for (uint32_t i = 0; i <= k; i++) rank_model.increment(i);
 
-    // ── Elias-gamma count encoding (unchanged) ────────────────────────────────
+    // ── Count models conditioned on rank bucket ───────────────────────────────
+    // rank 0 → bucket 0 (dominant symbol, long runs)
+    // rank 1 → bucket 1
+    // rank 2-3 → bucket 2
+    // rank 4+  → bucket 3
+    constexpr uint32_t COUNT_CTXS = 4;
+    auto rank_ctx = [](uint32_t r) -> uint32_t {
+        if (r == 0) return 0;
+        if (r == 1) return 1;
+        if (r <= 3) return 2;
+        return 3;
+    };
     std::vector<uint32_t> exp_init(32, 1u);
-    SimpleFrequencyTable  exp_model(exp_init);
+    std::vector<SimpleFrequencyTable> exp_models(COUNT_CTXS, SimpleFrequencyTable(exp_init));
     std::vector<uint32_t> bit_init(2, 1u);
-    SimpleFrequencyTable  bit_model(bit_init);
+    std::vector<SimpleFrequencyTable> bit_models(COUNT_CTXS, SimpleFrequencyTable(bit_init));
 
     std::ostringstream buf(std::ios::binary);
     RangeEncoder enc(buf);
@@ -108,13 +119,14 @@ static ChunkResult compress_chunk(
         for (uint32_t i = r; i > 0; i--) mtf_list[i] = mtf_list[i - 1];
         mtf_list[0] = s;
 
-        // Elias-gamma for count
+        // Elias-gamma for count, conditioned on rank bucket
+        uint32_t ctx = rank_ctx(r);
         int b = 31 - __builtin_clz(cnt);
-        enc.write(exp_model, static_cast<uint32_t>(b));
-        exp_model.increment(static_cast<uint32_t>(b));
+        enc.write(exp_models[ctx], static_cast<uint32_t>(b));
+        exp_models[ctx].increment(static_cast<uint32_t>(b));
         uint32_t residual = cnt - (1u << b);
         for (int i = b - 1; i >= 0; i--)
-            enc.write(bit_model, (residual >> i) & 1u);
+            enc.write(bit_models[ctx], (residual >> i) & 1u);
     }
 
     enc.write(rank_model, k);  // EOF marker (rank k is out of [0, k-1])
