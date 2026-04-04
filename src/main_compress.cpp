@@ -32,6 +32,7 @@
  */
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -48,6 +49,22 @@
 #include "coder/FenwickFrequencyTable.hpp"
 #include "model/BwtTransform.hpp"
 #include "model/RleTransform.hpp"
+
+
+// ── ORDER-0 adaptive range coding of raw bytes ───────────────────────────────
+static std::vector<uint8_t> order0_encode(const std::vector<uint8_t>& data) {
+    std::vector<uint32_t> init(256, 1u);
+    SimpleFrequencyTable model(init);
+    std::ostringstream buf(std::ios::binary);
+    RangeEncoder enc(buf);
+    for (uint8_t b : data) {
+        enc.write(model, b);
+        model.increment(b);
+    }
+    enc.finish();
+    std::string s = buf.str();
+    return std::vector<uint8_t>(s.begin(), s.end());
+}
 
 
 // ── Per-chunk result ──────────────────────────────────────────────────────────
@@ -185,45 +202,83 @@ int main(int argc, char *argv[]) {
             raw_data.push_back(static_cast<uint8_t>(b));
     }
 
-    // ── BWT forward on the whole file ─────────────────────────────────────────
-    auto [bwt_data, primary_index] = bwt_forward(raw_data);
-    raw_data.clear();
-    raw_data.shrink_to_fit();
-
-    // ── RLE of BWT output ─────────────────────────────────────────────────────
-    auto runs = rle_encode(bwt_data);
-    bwt_data.clear();
-    bwt_data.shrink_to_fit();
-
-    // ── Split runs into chunks (one per hardware thread) ─────────────────────
-    uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
-    uint32_t num_chunks = static_cast<uint32_t>(
-        std::min(static_cast<size_t>(hw), runs.size()));
-    if (num_chunks == 0) num_chunks = 1;
-
-    size_t runs_per_chunk = (runs.size() + num_chunks - 1) / num_chunks;
-    std::vector<std::vector<std::pair<uint8_t, uint32_t>>> chunks(num_chunks);
-    for (uint32_t i = 0; i < num_chunks; i++) {
-        size_t start = i * runs_per_chunk;
-        size_t end   = std::min(start + runs_per_chunk, runs.size());
-        if (start >= runs.size()) { num_chunks = i; break; }
-        chunks[i].assign(runs.begin() + static_cast<std::ptrdiff_t>(start),
-                         runs.begin() + static_cast<std::ptrdiff_t>(end));
+    // ── Compute ORDER-0 byte entropy ─────────────────────────────────────────
+    double H_bytes = 0.0;
+    {
+        uint64_t freq[256] = {};
+        for (uint8_t b : raw_data) freq[b]++;
+        double N = static_cast<double>(raw_data.size());
+        for (int i = 0; i < 256; i++) {
+            if (freq[i] > 0) {
+                double p = freq[i] / N;
+                H_bytes -= p * std::log2(p);
+            }
+        }
     }
-    runs.clear();
-    runs.shrink_to_fit();
 
-    // ── Encode chunks in parallel ─────────────────────────────────────────────
-    std::vector<std::future<ChunkResult>> futures;
-    futures.reserve(num_chunks);
-    for (uint32_t i = 0; i < num_chunks; i++)
-        futures.push_back(std::async(std::launch::async,
-                                     compress_chunk, chunks[i]));
+    // ── ORDER-0 adaptive encoding (fast, always computed) ────────────────────
+    uint32_t original_size = static_cast<uint32_t>(raw_data.size());
+    std::vector<uint8_t> order0_bs = order0_encode(raw_data);
 
+    // Files with H > 7.5 bpb are near-random: BWT won't help, skip it.
+    bool use_order0 = (H_bytes > 7.5);
+
+    uint32_t primary_index = 0;
+    uint32_t num_chunks    = 0;
     std::vector<ChunkResult> results;
-    results.reserve(num_chunks);
-    for (auto &f : futures)
-        results.push_back(f.get());
+
+    if (!use_order0) {
+        // ── BWT forward on the whole file ─────────────────────────────────────
+        {
+            auto [bwt_data, pi] = bwt_forward(raw_data);
+            primary_index = pi;
+            raw_data.clear();
+            raw_data.shrink_to_fit();
+
+            // ── RLE of BWT output ─────────────────────────────────────────────
+            auto runs = rle_encode(bwt_data);
+            bwt_data.clear();
+            bwt_data.shrink_to_fit();
+
+            // ── Split runs into chunks (one per hardware thread) ───────────────
+            uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
+            num_chunks = static_cast<uint32_t>(
+                std::min(static_cast<size_t>(hw), runs.size()));
+            if (num_chunks == 0) num_chunks = 1;
+
+            size_t runs_per_chunk = (runs.size() + num_chunks - 1) / num_chunks;
+            std::vector<std::vector<std::pair<uint8_t, uint32_t>>> chunks(num_chunks);
+            for (uint32_t i = 0; i < num_chunks; i++) {
+                size_t start = i * runs_per_chunk;
+                size_t end   = std::min(start + runs_per_chunk, runs.size());
+                if (start >= runs.size()) { num_chunks = i; break; }
+                chunks[i].assign(runs.begin() + static_cast<std::ptrdiff_t>(start),
+                                 runs.begin() + static_cast<std::ptrdiff_t>(end));
+            }
+            runs.clear();
+            runs.shrink_to_fit();
+
+            // ── Encode chunks in parallel ──────────────────────────────────────
+            std::vector<std::future<ChunkResult>> futures;
+            futures.reserve(num_chunks);
+            for (uint32_t i = 0; i < num_chunks; i++)
+                futures.push_back(std::async(std::launch::async,
+                                             compress_chunk, chunks[i]));
+            results.reserve(num_chunks);
+            for (auto &f : futures)
+                results.push_back(f.get());
+        }
+
+        // ── Compare BWT+MTF size vs ORDER-0 size, pick smaller ────────────────
+        // BWT+MTF header: 4 (magic) + 1 (mode) + 4 (primary_index) + 4 (num_chunks)
+        // Per chunk: 4 (bitstream_size) + 1 (MODEL_ORDER) + 1 (k_raw) + alphabet + bitstream
+        size_t bwt_size = 4 + 1 + 4 + 4;
+        for (const auto &r : results)
+            bwt_size += 4 + 1 + 1 + r.alphabet.size() + r.bitstream.size();
+        // ORDER-0 header: 4 (magic) + 1 (mode) + 4 (original_size) + 4 (bitstream_size)
+        size_t o0_size = 4 + 1 + 4 + 4 + order0_bs.size();
+        use_order0 = (o0_size < bwt_size);
+    }
 
     // ── Open output ───────────────────────────────────────────────────────────
     std::ofstream file_out;
@@ -236,21 +291,32 @@ int main(int argc, char *argv[]) {
     }
     std::ostream &out = (argc >= 3) ? static_cast<std::ostream &>(file_out) : std::cout;
 
-    // ── Write TAI7 global header ──────────────────────────────────────────────
-    out.write("TAI7", 4);
-    write_u32le(out, primary_index);
-    write_u32le(out, num_chunks);
-
-    // ── Write each chunk ──────────────────────────────────────────────────────
-    for (const auto &r : results) {
-        write_u32le(out, static_cast<uint32_t>(r.bitstream.size()));
-        out.put(0);  // MODEL_ORDER placeholder (unused)
-        out.put(static_cast<char>(r.k_raw));
-        if (r.k_raw != 0)
-            out.write(reinterpret_cast<const char *>(r.alphabet.data()),
-                      static_cast<std::streamsize>(r.alphabet.size()));
-        out.write(reinterpret_cast<const char *>(r.bitstream.data()),
-                  static_cast<std::streamsize>(r.bitstream.size()));
+    if (use_order0) {
+        // ── Write ORDER-0 output ──────────────────────────────────────────────
+        // Header: magic + mode=1 + original_size + bitstream_size
+        out.write("TAI7", 4);
+        out.put(1);  // mode = ORDER-0
+        write_u32le(out, original_size);
+        write_u32le(out, static_cast<uint32_t>(order0_bs.size()));
+        out.write(reinterpret_cast<const char *>(order0_bs.data()),
+                  static_cast<std::streamsize>(order0_bs.size()));
+    } else {
+        // ── Write BWT+MTF output ──────────────────────────────────────────────
+        // Header: magic + mode=0 + primary_index + num_chunks
+        out.write("TAI7", 4);
+        out.put(0);  // mode = BWT+MTF
+        write_u32le(out, primary_index);
+        write_u32le(out, num_chunks);
+        for (const auto &r : results) {
+            write_u32le(out, static_cast<uint32_t>(r.bitstream.size()));
+            out.put(0);  // MODEL_ORDER placeholder (unused)
+            out.put(static_cast<char>(r.k_raw));
+            if (r.k_raw != 0)
+                out.write(reinterpret_cast<const char *>(r.alphabet.data()),
+                          static_cast<std::streamsize>(r.alphabet.size()));
+            out.write(reinterpret_cast<const char *>(r.bitstream.data()),
+                      static_cast<std::streamsize>(r.bitstream.size()));
+        }
     }
 
     return EXIT_SUCCESS;

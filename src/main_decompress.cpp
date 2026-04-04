@@ -98,6 +98,25 @@ static std::vector<uint8_t> decompress_chunk(const ChunkData &cd)
 }
 
 
+// ── ORDER-0 adaptive range decoding of raw bytes ─────────────────────────────
+static std::vector<uint8_t> order0_decode(const std::vector<uint8_t>& bitstream,
+                                          uint32_t original_size) {
+    std::vector<uint32_t> init(256, 1u);
+    SimpleFrequencyTable model(init);
+    std::string raw(bitstream.begin(), bitstream.end());
+    std::istringstream buf(raw, std::ios::binary);
+    RangeDecoder dec(buf);
+    std::vector<uint8_t> result;
+    result.reserve(original_size);
+    for (uint32_t i = 0; i < original_size; i++) {
+        uint32_t sym = dec.read(model);
+        model.increment(sym);
+        result.push_back(static_cast<uint8_t>(sym));
+    }
+    return result;
+}
+
+
 // ── Read a uint32_t little-endian ─────────────────────────────────────────────
 static bool read_u32le(std::istream &in, uint32_t &v) {
     v = 0;
@@ -136,6 +155,45 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    int mode_byte = in.get();
+    if (!in) {
+        std::cerr << "Error: truncated global header (mode).\n";
+        return EXIT_FAILURE;
+    }
+    uint8_t mode = static_cast<uint8_t>(mode_byte);
+
+    // ── Open output ───────────────────────────────────────────────────────────
+    std::ofstream file_out;
+    if (argc == 3) {
+        file_out.open(argv[2], std::ios::binary);
+        if (!file_out) {
+            std::cerr << "Error: cannot open output file: " << argv[2] << "\n";
+            return EXIT_FAILURE;
+        }
+    }
+    std::ostream &out = (argc == 3) ? static_cast<std::ostream &>(file_out) : std::cout;
+
+    if (mode == 1) {
+        // ── ORDER-0 path ──────────────────────────────────────────────────────
+        uint32_t original_size = 0, bitstream_size = 0;
+        if (!read_u32le(in, original_size) || !read_u32le(in, bitstream_size)) {
+            std::cerr << "Error: truncated ORDER-0 header.\n";
+            return EXIT_FAILURE;
+        }
+        std::vector<uint8_t> bitstream(bitstream_size);
+        in.read(reinterpret_cast<char *>(bitstream.data()),
+                static_cast<std::streamsize>(bitstream_size));
+        if (!in) {
+            std::cerr << "Error: truncated ORDER-0 bitstream.\n";
+            return EXIT_FAILURE;
+        }
+        std::vector<uint8_t> original = order0_decode(bitstream, original_size);
+        out.write(reinterpret_cast<const char *>(original.data()),
+                  static_cast<std::streamsize>(original.size()));
+        return EXIT_SUCCESS;
+    }
+
+    // ── BWT+MTF path (mode == 0) ──────────────────────────────────────────────
     uint32_t primary_index = 0, num_chunks = 0;
     if (!read_u32le(in, primary_index) || !read_u32le(in, num_chunks)) {
         std::cerr << "Error: truncated global header.\n";
@@ -203,17 +261,6 @@ int main(int argc, char *argv[]) {
 
     // ── BWT inverse on the whole buffer ───────────────────────────────────────
     std::vector<uint8_t> original = bwt_inverse(bwt_buf, primary_index);
-
-    // ── Open output and write ─────────────────────────────────────────────────
-    std::ofstream file_out;
-    if (argc == 3) {
-        file_out.open(argv[2], std::ios::binary);
-        if (!file_out) {
-            std::cerr << "Error: cannot open output file: " << argv[2] << "\n";
-            return EXIT_FAILURE;
-        }
-    }
-    std::ostream &out = (argc == 3) ? static_cast<std::ostream &>(file_out) : std::cout;
     out.write(reinterpret_cast<const char *>(original.data()),
               static_cast<std::streamsize>(original.size()));
 
