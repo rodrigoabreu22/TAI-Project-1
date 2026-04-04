@@ -84,22 +84,24 @@ static ChunkResult compress_chunk(
     FenwickFrequencyTable rank_model(k + 1);
     for (uint32_t i = 0; i <= k; i++) rank_model.increment(i);
 
-    // ── Count models conditioned on rank bucket ───────────────────────────────
-    // rank 0 → bucket 0 (dominant symbol, long runs)
-    // rank 1 → bucket 1
-    // rank 2-3 → bucket 2
-    // rank 4+  → bucket 3
+    // ── Count models: direct adaptive model for small counts ─────────────────
+    // Symbols 0..THRESH-1 represent counts 1..THRESH.
+    // Symbol THRESH = "large" (count > THRESH) → followed by Elias-gamma.
+    // This approaches H(count) directly without singleton-flag overhead.
     constexpr uint32_t COUNT_CTXS = 4;
+    constexpr uint32_t THRESH = 8u;  // covers >99% of counts for all files
     auto rank_ctx = [](uint32_t r) -> uint32_t {
         if (r == 0) return 0;
         if (r == 1) return 1;
         if (r <= 3) return 2;
         return 3;
     };
+    std::vector<uint32_t> cnt_init(THRESH + 1, 1u);
+    std::vector<SimpleFrequencyTable> cnt_models(COUNT_CTXS, SimpleFrequencyTable(cnt_init));
     std::vector<uint32_t> exp_init(32, 1u);
-    std::vector<SimpleFrequencyTable> exp_models(COUNT_CTXS, SimpleFrequencyTable(exp_init));
+    SimpleFrequencyTable  exp_model(exp_init);  // for large counts only
     std::vector<uint32_t> bit_init(2, 1u);
-    std::vector<SimpleFrequencyTable> bit_models(COUNT_CTXS, SimpleFrequencyTable(bit_init));
+    SimpleFrequencyTable  bit_model(bit_init);
 
     std::ostringstream buf(std::ios::binary);
     RangeEncoder enc(buf);
@@ -119,17 +121,24 @@ static ChunkResult compress_chunk(
         for (uint32_t i = r; i > 0; i--) mtf_list[i] = mtf_list[i - 1];
         mtf_list[0] = s;
 
-        // Elias-gamma for count, conditioned on rank bucket
+        // Encode count via direct adaptive model (counts 1..THRESH) or Elias-gamma
         uint32_t ctx = rank_ctx(r);
-        int b = 31 - __builtin_clz(cnt);
-        enc.write(exp_models[ctx], static_cast<uint32_t>(b));
-        exp_models[ctx].increment(static_cast<uint32_t>(b));
-        uint32_t residual = cnt - (1u << b);
-        for (int i = b - 1; i >= 0; i--)
-            enc.write(bit_models[ctx], (residual >> i) & 1u);
+        uint32_t sym_cnt = (cnt <= THRESH) ? (cnt - 1u) : THRESH;
+        enc.write(cnt_models[ctx], sym_cnt);
+        cnt_models[ctx].increment(sym_cnt);
+
+        if (cnt > THRESH) {
+            // Elias-gamma for overflow counts
+            int b = 31 - __builtin_clz(cnt);
+            enc.write(exp_model, static_cast<uint32_t>(b));
+            exp_model.increment(static_cast<uint32_t>(b));
+            uint32_t residual = cnt - (1u << b);
+            for (int i = b - 1; i >= 0; i--)
+                enc.write(bit_model, (residual >> i) & 1u);
+        }
     }
 
-    enc.write(rank_model, k);  // EOF marker (rank k is out of [0, k-1])
+    enc.write(rank_model, k);  // EOF marker
     enc.finish();
 
     ChunkResult result;
