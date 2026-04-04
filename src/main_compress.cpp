@@ -52,9 +52,10 @@
 
 
 // ── ORDER-0 adaptive range coding of raw bytes ───────────────────────────────
+// Uses FenwickFrequencyTable for O(log 256) getLow/getHigh/findSymbol per symbol.
 static std::vector<uint8_t> order0_encode(const std::vector<uint8_t>& data) {
-    std::vector<uint32_t> init(256, 1u);
-    SimpleFrequencyTable model(init);
+    FenwickFrequencyTable model(256);
+    for (int i = 0; i < 256; i++) model.increment(i);  // uniform prior
     std::ostringstream buf(std::ios::binary);
     RangeEncoder enc(buf);
     for (uint8_t b : data) {
@@ -216,68 +217,78 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // ── ORDER-0 adaptive encoding (fast, always computed) ────────────────────
     uint32_t original_size = static_cast<uint32_t>(raw_data.size());
-    std::vector<uint8_t> order0_bs = order0_encode(raw_data);
 
-    // Files with H > 7.5 bpb are near-random: BWT won't help, skip it.
+    // Files with H > 7.5 bpb are near-random: BWT won't help, skip it entirely.
     bool use_order0 = (H_bytes > 7.5);
 
     uint32_t primary_index = 0;
     uint32_t num_chunks    = 0;
     std::vector<ChunkResult> results;
+    std::vector<uint8_t> order0_bs;
 
-    if (!use_order0) {
+    if (use_order0) {
+        // Near-random file: encode directly with ORDER-0, skip BWT.
+        order0_bs = order0_encode(raw_data);
+        raw_data.clear();
+        raw_data.shrink_to_fit();
+    } else {
         // ── BWT forward on the whole file ─────────────────────────────────────
-        {
-            auto [bwt_data, pi] = bwt_forward(raw_data);
-            primary_index = pi;
-            raw_data.clear();
-            raw_data.shrink_to_fit();
+        auto [bwt_data, pi] = bwt_forward(raw_data);
+        primary_index = pi;
+        // Do NOT clear raw_data yet — may need it for ORDER-0 comparison below.
 
-            // ── RLE of BWT output ─────────────────────────────────────────────
-            auto runs = rle_encode(bwt_data);
-            bwt_data.clear();
-            bwt_data.shrink_to_fit();
+        // ── RLE of BWT output ─────────────────────────────────────────────────
+        auto runs = rle_encode(bwt_data);
+        bwt_data.clear();
+        bwt_data.shrink_to_fit();
 
-            // ── Split runs into chunks (one per hardware thread) ───────────────
-            uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
-            num_chunks = static_cast<uint32_t>(
-                std::min(static_cast<size_t>(hw), runs.size()));
-            if (num_chunks == 0) num_chunks = 1;
+        // If avg run length is high, BWT clearly helps → skip ORDER-0 comparison.
+        // Otherwise encode both and pick the smaller output.
+        double avg_run = static_cast<double>(original_size) / static_cast<double>(runs.size());
+        bool compare_order0 = (avg_run < 2.0);
 
-            size_t runs_per_chunk = (runs.size() + num_chunks - 1) / num_chunks;
-            std::vector<std::vector<std::pair<uint8_t, uint32_t>>> chunks(num_chunks);
-            for (uint32_t i = 0; i < num_chunks; i++) {
-                size_t start = i * runs_per_chunk;
-                size_t end   = std::min(start + runs_per_chunk, runs.size());
-                if (start >= runs.size()) { num_chunks = i; break; }
-                chunks[i].assign(runs.begin() + static_cast<std::ptrdiff_t>(start),
-                                 runs.begin() + static_cast<std::ptrdiff_t>(end));
-            }
-            runs.clear();
-            runs.shrink_to_fit();
+        if (compare_order0)
+            order0_bs = order0_encode(raw_data);
+        raw_data.clear();
+        raw_data.shrink_to_fit();
 
-            // ── Encode chunks in parallel ──────────────────────────────────────
-            std::vector<std::future<ChunkResult>> futures;
-            futures.reserve(num_chunks);
-            for (uint32_t i = 0; i < num_chunks; i++)
-                futures.push_back(std::async(std::launch::async,
-                                             compress_chunk, chunks[i]));
-            results.reserve(num_chunks);
-            for (auto &f : futures)
-                results.push_back(f.get());
+        // ── Split runs into chunks (one per hardware thread) ───────────────────
+        uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
+        num_chunks = static_cast<uint32_t>(
+            std::min(static_cast<size_t>(hw), runs.size()));
+        if (num_chunks == 0) num_chunks = 1;
+
+        size_t runs_per_chunk = (runs.size() + num_chunks - 1) / num_chunks;
+        std::vector<std::vector<std::pair<uint8_t, uint32_t>>> chunks(num_chunks);
+        for (uint32_t i = 0; i < num_chunks; i++) {
+            size_t start = i * runs_per_chunk;
+            size_t end   = std::min(start + runs_per_chunk, runs.size());
+            if (start >= runs.size()) { num_chunks = i; break; }
+            chunks[i].assign(runs.begin() + static_cast<std::ptrdiff_t>(start),
+                             runs.begin() + static_cast<std::ptrdiff_t>(end));
         }
+        runs.clear();
+        runs.shrink_to_fit();
 
-        // ── Compare BWT+MTF size vs ORDER-0 size, pick smaller ────────────────
-        // BWT+MTF header: 4 (magic) + 1 (mode) + 4 (primary_index) + 4 (num_chunks)
-        // Per chunk: 4 (bitstream_size) + 1 (MODEL_ORDER) + 1 (k_raw) + alphabet + bitstream
-        size_t bwt_size = 4 + 1 + 4 + 4;
-        for (const auto &r : results)
-            bwt_size += 4 + 1 + 1 + r.alphabet.size() + r.bitstream.size();
-        // ORDER-0 header: 4 (magic) + 1 (mode) + 4 (original_size) + 4 (bitstream_size)
-        size_t o0_size = 4 + 1 + 4 + 4 + order0_bs.size();
-        use_order0 = (o0_size < bwt_size);
+        // ── Encode chunks in parallel ──────────────────────────────────────────
+        std::vector<std::future<ChunkResult>> futures;
+        futures.reserve(num_chunks);
+        for (uint32_t i = 0; i < num_chunks; i++)
+            futures.push_back(std::async(std::launch::async,
+                                         compress_chunk, chunks[i]));
+        results.reserve(num_chunks);
+        for (auto &f : futures)
+            results.push_back(f.get());
+
+        // ── Compare sizes if we encoded both ──────────────────────────────────
+        if (compare_order0) {
+            size_t bwt_size = 4 + 1 + 4 + 4;
+            for (const auto &r : results)
+                bwt_size += 4 + 1 + 1 + r.alphabet.size() + r.bitstream.size();
+            size_t o0_size = 4 + 1 + 4 + 4 + order0_bs.size();
+            use_order0 = (o0_size < bwt_size);
+        }
     }
 
     // ── Open output ───────────────────────────────────────────────────────────

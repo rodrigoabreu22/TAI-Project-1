@@ -99,10 +99,11 @@ static std::vector<uint8_t> decompress_chunk(const ChunkData &cd)
 
 
 // ── ORDER-0 adaptive range decoding of raw bytes ─────────────────────────────
+// Uses FenwickFrequencyTable for O(log 256) findSymbol per symbol.
 static std::vector<uint8_t> order0_decode(const std::vector<uint8_t>& bitstream,
                                           uint32_t original_size) {
-    std::vector<uint32_t> init(256, 1u);
-    SimpleFrequencyTable model(init);
+    FenwickFrequencyTable model(256);
+    for (int i = 0; i < 256; i++) model.increment(i);  // uniform prior
     std::string raw(bitstream.begin(), bitstream.end());
     std::istringstream buf(raw, std::ios::binary);
     RangeDecoder dec(buf);
