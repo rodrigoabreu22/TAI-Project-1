@@ -6,26 +6,31 @@
  *   2. RLE of BWT output.
  *   3. Split runs into N chunks (N = hardware thread count).
  *   4. Each chunk: MTF on run symbols → adaptive ORDER=0 range-code → buffer.
- *   5. Write TAI7 header + per-chunk data.
+ *   5. Write header + per-chunk data.
  *
  * MTF (Move-To-Front) converts the run-symbol stream to rank indices
  * heavily concentrated near 0 (BWT clusters identical symbols → same symbol
  * repeats → MTF rank is 0 almost always).  ORDER=0 codes this very cheaply.
  * This is the same principle as bzip2 (BWT + MTF + Huffman).
  *
- * Compressed file format (TAI7)
- * ─────────────────────────────
+ * Compressed file format
+ * ──────────────────────
  *  [Global header]
- *  Bytes 0–3   Magic "TAI7"
- *  Bytes 4–7   uint32_t primary_index (LE) — for whole-file BWT inverse
- *  Bytes 8–11  uint32_t num_chunks (LE)
+ *  Byte  0     uint8_t  mode  (0 = BWT+MTF, 1 = ORDER-0)
  *
+ *  mode=0 (BWT+MTF):
+ *  Bytes 1–4   uint32_t primary_index (LE) — for whole-file BWT inverse
+ *  Bytes 5–8   uint32_t num_chunks (LE)
  *  [Per chunk, repeated num_chunks times]
  *  4 bytes  uint32_t bitstream_size (LE)
- *  1 byte   uint8_t  MODEL_ORDER  (unused — kept for format compatibility)
  *  1 byte   uint8_t  k_raw  (0 = full 256; 1–255 = actual k)
  *  k bytes  sorted alphabet (omitted if k_raw == 0)
  *  <bitstream_size bytes of range-coded data>
+ *
+ *  mode=1 (ORDER-0):
+ *  Bytes 1–4   uint32_t original_size (LE)
+ *  Bytes 5–8   uint32_t bitstream_size (LE)
+ *  <bitstream_size bytes of ORDER-0 range-coded data>
  *
  * Usage:  compress <input_file> <output_file>
  *         compress          (stdin → stdout)
@@ -321,10 +326,10 @@ int main(int argc, char *argv[]) {
 
         // ── Compare sizes if we encoded both ──────────────────────────────────
         if (compare_order0) {
-            size_t bwt_size = 4 + 1 + 4 + 4;
+            size_t bwt_size = 1 + 4 + 4;  // mode + primary_index + num_chunks
             for (const auto &r : results)
-                bwt_size += 4 + 1 + 1 + r.alphabet.size() + r.bitstream.size();
-            size_t o0_size = 4 + 1 + 4 + 4 + order0_bs.size();
+                bwt_size += 4 + 1 + r.alphabet.size() + r.bitstream.size();
+            size_t o0_size = 1 + 4 + 4 + order0_bs.size();  // mode + original_size + bitstream_size
             use_order0 = (o0_size < bwt_size);
         }
     }
@@ -342,8 +347,7 @@ int main(int argc, char *argv[]) {
 
     if (use_order0) {
         // ── Write ORDER-0 output ──────────────────────────────────────────────
-        // Header: magic + mode=1 + original_size + bitstream_size
-        out.write("TAI7", 4);
+        // Header: mode=1 + original_size + bitstream_size
         out.put(1);  // mode = ORDER-0
         write_u32le(out, original_size);
         write_u32le(out, static_cast<uint32_t>(order0_bs.size()));
@@ -351,14 +355,12 @@ int main(int argc, char *argv[]) {
                   static_cast<std::streamsize>(order0_bs.size()));
     } else {
         // ── Write BWT+MTF output ──────────────────────────────────────────────
-        // Header: magic + mode=0 + primary_index + num_chunks
-        out.write("TAI7", 4);
+        // Header: mode=0 + primary_index + num_chunks
         out.put(0);  // mode = BWT+MTF
         write_u32le(out, primary_index);
         write_u32le(out, num_chunks);
         for (const auto &r : results) {
             write_u32le(out, static_cast<uint32_t>(r.bitstream.size()));
-            out.put(0);  // MODEL_ORDER placeholder (unused)
             out.put(static_cast<char>(r.k_raw));
             if (r.k_raw != 0)
                 out.write(reinterpret_cast<const char *>(r.alphabet.data()),

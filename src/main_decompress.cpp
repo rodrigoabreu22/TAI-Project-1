@@ -19,7 +19,6 @@
 #include "coder/FrequencyTable.hpp"
 #include "coder/FenwickFrequencyTable.hpp"
 #include "model/BwtTransform.hpp"
-#include "model/RleTransform.hpp"
 
 
 // ── Per-chunk data ────────────────────────────────────────────────────────────
@@ -148,17 +147,10 @@ int main(int argc, char *argv[]) {
     }
     std::istream &in = (argc == 3) ? static_cast<std::istream &>(file_in) : std::cin;
 
-    // ── Read and validate global header ───────────────────────────────────────
-    char magic[4];
-    in.read(magic, 4);
-    if (!in || magic[0] != 'T' || magic[1] != 'A' || magic[2] != 'I' || magic[3] != '7') {
-        std::cerr << "Error: not a TAI7 compressed file.\n";
-        return EXIT_FAILURE;
-    }
-
+    // ── Read mode byte ────────────────────────────────────────────────────────
     int mode_byte = in.get();
     if (!in) {
-        std::cerr << "Error: truncated global header (mode).\n";
+        std::cerr << "Error: empty or truncated input.\n";
         return EXIT_FAILURE;
     }
     uint8_t mode = static_cast<uint8_t>(mode_byte);
@@ -209,12 +201,6 @@ int main(int argc, char *argv[]) {
         uint32_t bitstream_size = 0;
         if (!read_u32le(in, bitstream_size)) {
             std::cerr << "Error: truncated bitstream_size (chunk " << i << ").\n";
-            return EXIT_FAILURE;
-        }
-
-        in.get();  // MODEL_ORDER placeholder (unused)
-        if (!in) {
-            std::cerr << "Error: truncated header (chunk " << i << ").\n";
             return EXIT_FAILURE;
         }
 
