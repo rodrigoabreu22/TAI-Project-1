@@ -197,17 +197,39 @@ int main(int argc, char *argv[]) {
 
     // ── Read entire input ─────────────────────────────────────────────────────
     std::vector<uint8_t> raw_data;
-    {
+    if (argc >= 3) {
+        file_in.seekg(0, std::ios::end);
+        std::streamsize sz = file_in.tellg();
+        file_in.seekg(0, std::ios::beg);
+        if (sz > 0) {
+            raw_data.resize(static_cast<size_t>(sz));
+            file_in.read(reinterpret_cast<char *>(raw_data.data()), sz);
+            raw_data.resize(static_cast<size_t>(file_in.gcount()));
+        }
+    } else {
         int b;
         while ((b = in.get()) != std::char_traits<char>::eof())
             raw_data.push_back(static_cast<uint8_t>(b));
     }
 
-    // ── Compute ORDER-0 byte entropy ─────────────────────────────────────────
+    uint32_t original_size = static_cast<uint32_t>(raw_data.size());
+
+    // ── Single-pass: byte entropy + bigram MI pre-filter ─────────────────────
+    // Merged into one scan to avoid reading raw_data twice.
+    // MI = 2*H(bytes) - H(bigrams): if MI < 0.45 bytes are near-independent
+    // and BWT won't improve compression → use ORDER-0 directly.
+    // Measured: A=0.013, E=0.358 (skip BWT), F=0.536 (BWT helps).
     double H_bytes = 0.0;
+    bool use_order0 = false;
     {
         uint64_t freq[256] = {};
-        for (uint8_t b : raw_data) freq[b]++;
+        std::vector<uint32_t> bg(65536u, 0u);
+        for (size_t i = 0; i < raw_data.size(); i++) {
+            uint8_t b = raw_data[i];
+            freq[b]++;
+            if (i > 0)
+                bg[(static_cast<uint32_t>(raw_data[i - 1]) << 8) | b]++;
+        }
         double N = static_cast<double>(raw_data.size());
         for (int i = 0; i < 256; i++) {
             if (freq[i] > 0) {
@@ -215,34 +237,21 @@ int main(int argc, char *argv[]) {
                 H_bytes -= p * std::log2(p);
             }
         }
-    }
-
-    uint32_t original_size = static_cast<uint32_t>(raw_data.size());
-
-    // Files with H > 7.5 bpb are near-random: BWT won't help, skip it entirely.
-    bool use_order0 = (H_bytes > 7.5);
-
-    // Fast O(N) pre-filter: bigram mutual information.
-    // MI = H(X) + H(X_prev) - H(X,X_prev) = 2*H_bytes - H_bigrams.
-    // If adjacent bytes carry near-zero information about each other, BWT
-    // will not cluster the data and ORDER-0 is already near-optimal.
-    // Measured MI values: A=0.013, E=0.358 (BWT hurts both), F=0.536 (BWT helps).
-    // Threshold 0.45 sits safely between E and F, skipping BWT for A and E only.
-    if (!use_order0 && raw_data.size() > 1) {
-        std::vector<uint32_t> bg(65536u, 0u);
-        for (size_t i = 1; i < raw_data.size(); i++)
-            bg[(static_cast<uint32_t>(raw_data[i - 1]) << 8) | raw_data[i]]++;
-        double N2 = static_cast<double>(raw_data.size() - 1);
-        double H_bigrams = 0.0;
-        for (uint32_t c = 0; c < 65536u; c++) {
-            if (bg[c] > 0) {
-                double p = static_cast<double>(bg[c]) / N2;
-                H_bigrams -= p * std::log2(p);
-            }
-        }
-        double MI = 2.0 * H_bytes - H_bigrams;
-        if (MI < 0.45)
+        if (H_bytes > 7.5) {
             use_order0 = true;
+        } else if (raw_data.size() > 1) {
+            double N2 = static_cast<double>(raw_data.size() - 1);
+            double H_bigrams = 0.0;
+            for (uint32_t c = 0; c < 65536u; c++) {
+                if (bg[c] > 0) {
+                    double p = static_cast<double>(bg[c]) / N2;
+                    H_bigrams -= p * std::log2(p);
+                }
+            }
+            double MI = 2.0 * H_bytes - H_bigrams;
+            if (MI < 0.45)
+                use_order0 = true;
+        }
     }
 
     uint32_t primary_index = 0;
@@ -256,10 +265,14 @@ int main(int argc, char *argv[]) {
         raw_data.clear();
         raw_data.shrink_to_fit();
     } else {
+        // Launch ORDER-0 speculatively in the background while BWT runs.
+        // Both only read raw_data; both finish before raw_data.clear() below.
+        std::future<std::vector<uint8_t>> order0_future =
+            std::async(std::launch::async, order0_encode, std::cref(raw_data));
+
         // ── BWT forward on the whole file ─────────────────────────────────────
         auto [bwt_data, pi] = bwt_forward(raw_data);
         primary_index = pi;
-        // Do NOT clear raw_data yet — may need it for ORDER-0 comparison below.
 
         // ── RLE of BWT output ─────────────────────────────────────────────────
         auto runs = rle_encode(bwt_data);
@@ -272,7 +285,9 @@ int main(int argc, char *argv[]) {
         bool compare_order0 = (avg_run < 2.0);
 
         if (compare_order0)
-            order0_bs = order0_encode(raw_data);
+            order0_bs = order0_future.get();
+        else
+            order0_future.get();  // wait for thread to finish before clearing raw_data
         raw_data.clear();
         raw_data.shrink_to_fit();
 
