@@ -222,6 +222,29 @@ int main(int argc, char *argv[]) {
     // Files with H > 7.5 bpb are near-random: BWT won't help, skip it entirely.
     bool use_order0 = (H_bytes > 7.5);
 
+    // Fast O(N) pre-filter: bigram mutual information.
+    // MI = H(X) + H(X_prev) - H(X,X_prev) = 2*H_bytes - H_bigrams.
+    // If adjacent bytes carry near-zero information about each other, BWT
+    // will not cluster the data and ORDER-0 is already near-optimal.
+    // Measured MI values: A=0.013, E=0.358 (BWT hurts both), F=0.536 (BWT helps).
+    // Threshold 0.45 sits safely between E and F, skipping BWT for A and E only.
+    if (!use_order0 && raw_data.size() > 1) {
+        std::vector<uint32_t> bg(65536u, 0u);
+        for (size_t i = 1; i < raw_data.size(); i++)
+            bg[(static_cast<uint32_t>(raw_data[i - 1]) << 8) | raw_data[i]]++;
+        double N2 = static_cast<double>(raw_data.size() - 1);
+        double H_bigrams = 0.0;
+        for (uint32_t c = 0; c < 65536u; c++) {
+            if (bg[c] > 0) {
+                double p = static_cast<double>(bg[c]) / N2;
+                H_bigrams -= p * std::log2(p);
+            }
+        }
+        double MI = 2.0 * H_bytes - H_bigrams;
+        if (MI < 0.45)
+            use_order0 = true;
+    }
+
     uint32_t primary_index = 0;
     uint32_t num_chunks    = 0;
     std::vector<ChunkResult> results;
