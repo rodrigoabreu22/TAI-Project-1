@@ -9,6 +9,14 @@ Lossless data compression tool implementing a two-stage architecture: a custom *
 | `ox-ratio`    | Maximum compression ratio regardless of time |
 | `ox-speed`    | Minimum compression/decompression latency |
 
+## Authors
+
+| Name | GitHub |
+|------|--------|
+| Eduardo Lopes | [@odraude23](https://github.com/odraude23) |
+| Rodrigo Abreu | [@rodrigoabreu22](https://github.com/rodrigoabreu22) |
+| Hugo Ribeiro  | [@xHuGODx](https://github.com/xHuGODx) |
+
 ## Build
 
 ```bash
