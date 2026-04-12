@@ -13,21 +13,19 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Common source files (model, coder, io)
-file(GLOB_RECURSE LIB_SOURCES
-    src/model/*.cpp
-    src/coder/*.cpp
-    src/io/*.cpp
-)
-
 find_package(Threads REQUIRED)
 
-# Compressor executable
-add_executable(compress src/main_compress.cpp ${LIB_SOURCES})
-target_include_directories(compress PRIVATE src)
-target_link_libraries(compress PRIVATE Threads::Threads)
+# ── balanced ──────────────────────────────────────────────────────────────────
+file(GLOB BALANCED_SOURCES
+    src/balanced/coder/*.cpp
+)
 
-# Decompressor executable
-add_executable(decompress src/main_decompress.cpp ${LIB_SOURCES})
-target_include_directories(decompress PRIVATE src)
-target_link_libraries(decompress PRIVATE Threads::Threads)
+add_executable(compress_balanced
+    src/balanced/main_compress.cpp ${BALANCED_SOURCES})
+target_include_directories(compress_balanced PRIVATE src/balanced)
+target_link_libraries(compress_balanced PRIVATE Threads::Threads)
+
+add_executable(decompress_balanced
+    src/balanced/main_decompress.cpp ${BALANCED_SOURCES})
+target_include_directories(decompress_balanced PRIVATE src/balanced)
+target_link_libraries(decompress_balanced PRIVATE Threads::Threads)
