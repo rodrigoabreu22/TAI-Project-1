@@ -9,6 +9,10 @@
 #   -d DIR        Data directory (default: data)
 #   -f FILES      Comma-separated file names to test (default: A,B,C,D,E,F,G,H)
 #   -c            Test on concatenated file (all files joined — matches prof table)
+#   -m            Per-file aggregate mode: compress each file individually, then
+#                 show one summary table with total sizes and summed times.
+#                 bits/byte = total_compressed_bits / total_original_bytes.
+#                 Lossless = YES only if every file round-tripped correctly.
 #   -o TOOL_CMD   Add your own tool. Format: "name:compress_cmd:decompress_cmd"
 #                 Use %i/%o placeholders for file-argument tools:
 #                   -o "myc:./compress %i %o:./decompress %i %o"
@@ -18,10 +22,10 @@
 #   -h            Show this help
 #
 # Examples:
-#   ./benchmark.sh                          # test all files individually
-#   ./benchmark.sh -c                       # concatenate A-H (matches prof table)
-#   ./benchmark.sh -c -o "ox:./ox -c:./ox -d"
-#   ./benchmark.sh -c -o "myc:./compress %i %o:./decompress %i %o"
+#   ./benchmark.sh                          # test all files individually (one table each)
+#   ./benchmark.sh -c                       # concatenate A-H into one file, one table
+#   ./benchmark.sh -m                       # per-file runs, single aggregate summary table
+#   ./benchmark.sh -m -o "ox:./compress %i %o:./decompress %i %o"
 #   ./benchmark.sh -f C,D -r 3             # test files C and D, 3 timing runs
 # =============================================================================
 
@@ -31,6 +35,7 @@ set -euo pipefail
 DATA_DIR="data"
 FILES_ARG="A,B,C,D,E,F,G,H"
 CONCAT_MODE=false
+MULTI_MODE=false
 OWN_TOOL=""
 RUNS=1
 QUIET=false
@@ -44,15 +49,16 @@ warn() { printf "${Y}[warn] ${N}%s\n" "$*" >&2; }
 err()  { printf "${R}[error]${N} %s\n" "$*" >&2; exit 1; }
 
 # ---------- arg parsing ------------------------------------------------------
-while getopts "d:f:co:r:qh" opt; do
+while getopts "d:f:cmo:r:qh" opt; do
     case $opt in
         d) DATA_DIR="$OPTARG" ;;
         f) FILES_ARG="$OPTARG" ;;
         c) CONCAT_MODE=true ;;
+        m) MULTI_MODE=true ;;
         o) OWN_TOOL="$OPTARG" ;;
         r) RUNS="$OPTARG" ;;
         q) QUIET=true ;;
-        h) sed -n '2,30p' "$0"; exit 0 ;;
+        h) sed -n '2,32p' "$0"; exit 0 ;;
         *) err "Unknown option -$OPTARG. Use -h for help." ;;
     esac
 done
@@ -267,6 +273,96 @@ bench_file() {
     echo ""
 }
 
+# ---------- per-file aggregate mode (-m) -------------------------------------
+# Run every compressor on each file individually, accumulate totals, print one
+# summary table.
+#   bits/byte  = total_compressed_bits / total_original_bytes  (weighted)
+#   t_comp/dcp = mean across files  (sum / num_files)
+#   Lossless   = YES only if every file round-tripped correctly
+bench_files_aggregate() {
+    local total_orig=0
+    local num_files="${#FILE_LIST[@]}"
+
+    # Associative arrays keyed by compressor name
+    declare -A acc_comp   # total compressed bytes
+    declare -A acc_tc     # total t_comp (bc string, accumulated)
+    declare -A acc_td     # total t_decomp
+    declare -A acc_ok     # "true" if ALL files lossless so far
+
+    # Initialise accumulators
+    local i
+    for (( i=0; i<${#NAMES[@]}; i++ )); do
+        local n="${NAMES[$i]}"
+        acc_comp[$n]=0
+        acc_tc[$n]="0"
+        acc_td[$n]="0"
+        acc_ok[$n]="true"
+    done
+
+    # --- iterate over files ---
+    for f in "${FILE_LIST[@]}"; do
+        local fp="$DATA_DIR/$f"
+        local orig_bytes
+        orig_bytes=$(stat -c%s "$fp")
+        total_orig=$(( total_orig + orig_bytes ))
+        local orig_mb
+        orig_mb=$(bytes_to_mb "$orig_bytes")
+        log "File $f  ($orig_mb MB, $orig_bytes bytes)"
+
+        for (( i=0; i<${#NAMES[@]}; i++ )); do
+            local n="${NAMES[$i]}"
+            log "  -> $n ..."
+            read -r cb tc td ls <<< "$(bench_one "$fp" "$n" "${COMP_CMDS[$i]}" "${DECOMP_CMDS[$i]}")"
+            acc_comp[$n]=$(( acc_comp[$n] + cb ))
+            acc_tc[$n]=$(echo "${acc_tc[$n]} + $tc" | bc)
+            acc_td[$n]=$(echo "${acc_td[$n]} + $td" | bc)
+            [[ "$ls" != "YES" ]] && acc_ok[$n]="false"
+        done
+    done
+
+    # --- build sorted list by total compressed bytes ---
+    local sortlist=""
+    for (( i=0; i<${#NAMES[@]}; i++ )); do
+        sortlist+="${acc_comp[${NAMES[$i]}]} $i"$'\n'
+    done
+    mapfile -t sorted <<< "$(echo "$sortlist" | sort -n)"
+
+    local total_orig_mb
+    total_orig_mb=$(bytes_to_mb "$total_orig")
+    local label
+    label="Per-file aggregate ($(IFS=+; echo "${FILE_LIST[*]}"))  —  ${num_files} files, ${total_orig_mb} MB total  [times = mean per file]"
+    print_header "$label"
+
+    local rank=1
+    for entry in "${sorted[@]}"; do
+        [[ -z "$entry" ]] && continue
+        local idx
+        idx=$(echo "$entry" | awk '{print $2}')
+        local n="${NAMES[$idx]}"
+        local cb="${acc_comp[$n]}"
+        local tc td tt comp_mb ratio bps
+        comp_mb=$(bytes_to_mb "$cb")
+        ratio=$(ratio_pct "$total_orig" "$cb")
+        bps=$(bits_per_sym "$total_orig" "$cb")
+        tc=$(awk "BEGIN{printf \"%.3f\", ${acc_tc[$n]} / $num_files}")
+        td=$(awk "BEGIN{printf \"%.3f\", ${acc_td[$n]} / $num_files}")
+        tt=$(awk "BEGIN{printf \"%.3f\", $tc+$td}")
+
+        local lossless_mark
+        [[ "${acc_ok[$n]}" == "true" ]] \
+            && lossless_mark="${G}YES${N}" \
+            || lossless_mark="${R}NO ${N}"
+
+        printf "| %-4s | %-14s | %12s | %12s | %6s | %9s | %9s | %9s | %9s | %-9b |\n" \
+            "$rank" "$n" "$total_orig_mb" "$comp_mb" "${ratio}%" \
+            "$bps" "$tc" "$td" "$tt" "$lossless_mark"
+        (( rank++ ))
+    done
+
+    separator
+    echo ""
+}
+
 # ---------- main -------------------------------------------------------------
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -294,6 +390,8 @@ if $CONCAT_MODE; then
     done
     label="Concatenated ($(IFS=+; echo "${FILE_LIST[*]}"))"
     bench_file "$cat_file" "$label"
+elif $MULTI_MODE; then
+    bench_files_aggregate
 else
     for f in "${FILE_LIST[@]}"; do
         bench_file "$DATA_DIR/$f" "File $f"
