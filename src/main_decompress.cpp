@@ -1,61 +1,50 @@
 /*
- * TAI Project 1 — PPM Arithmetic Decompressor (BWT + PPM)
+ * TAI Project 1 — Decompressor (Block BWT + MTF + Context Mixing + Range Coding)
  *
- * Reads a TAI5 file and reconstructs the original data exactly (lossless).
- *
- * Pipeline:
- *   1. Read TAI5 header (MODEL_ORDER, compact alphabet, primary_index).
- *   2. Decode the arithmetic-coded PPM bitstream into the BWT output buffer.
- *   3. Apply BWT inverse (LF-mapping, O(N)) to recover the original data.
- *   4. Write original data to output.
+ * Reads a TA10 file and reconstructs the original data exactly.
+ * Uses the same context-mixing model as the compressor to reproduce
+ * identical probability predictions without any extra data in the file.
  *
  * Usage:  decompress <compressed_file> <output_file>
- *         decompress          (stdin → stdout)
+ *         decompress          (stdin -> stdout)
  */
 
-#include <cstddef>
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
 #include <fstream>
 #include <iostream>
-#include <stdexcept>
+#include <limits>
 #include <vector>
 
 #include "coder/RangeCoder.hpp"
-#include "coder/FrequencyTable.hpp"
 #include "model/BwtTransform.hpp"
-#include "model/RleTransform.hpp"
-#include "model/PpmModel.hpp"
+#include "model/ContextMixModel.hpp"
+#include "model/MoveToFront.hpp"
 
+namespace {
 
-static std::uint32_t decodeSymbol(RangeDecoder &dec,
-                                  PpmModel &model,
-                                  const std::deque<std::uint32_t> &history)
-{
-    for (int order = static_cast<int>(history.size()); order >= 0; order--) {
-        PpmModel::Context *ctx = model.rootContext.get();
-
-        for (int i = 0; i < order; i++) {
-            if (!ctx->hasSubctx)
-                throw std::logic_error("Assertion error");
-            ctx = ctx->subcontexts.at(history.at(static_cast<std::size_t>(i))).get();
-            if (ctx == nullptr)
-                goto nextOrder;
-        }
-
-        {
-            std::uint32_t sym = dec.read(ctx->frequencies);
-            if (sym != model.escapeSymbol)
-                return sym;
-        }
-
-        nextOrder:;
+bool readUint64LE(std::istream &in, std::uint64_t &v) {
+    v = 0;
+    for (int i = 0; i < 8; ++i) {
+        const int b = in.get();
+        if (!in) return false;
+        v |= static_cast<std::uint64_t>(static_cast<std::uint8_t>(b)) << (i * 8);
     }
-
-    return dec.read(model.orderMinus1Freqs);
+    return true;
 }
 
+bool readUint32LE(std::istream &in, std::uint32_t &v) {
+    v = 0;
+    for (int i = 0; i < 4; ++i) {
+        const int b = in.get();
+        if (!in) return false;
+        v |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(b)) << (i * 8);
+    }
+    return true;
+}
+
+}  // namespace
 
 int main(int argc, char *argv[]) {
     if (argc != 1 && argc != 3) {
@@ -64,7 +53,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // ── Open input ────────────────────────────────────────────────────────────
+    // --- Open input ---
     std::ifstream file_in;
     if (argc == 3) {
         file_in.open(argv[1], std::ios::binary);
@@ -75,61 +64,54 @@ int main(int argc, char *argv[]) {
     }
     std::istream &in = (argc == 3) ? static_cast<std::istream &>(file_in) : std::cin;
 
-    // ── Read and validate header ──────────────────────────────────────────────
+    // --- Read and validate header ---
     char magic[4];
     in.read(magic, 4);
-    if (!in || magic[0] != 'T' || magic[1] != 'A' || magic[2] != 'I' || magic[3] != '6') {
-        std::cerr << "Error: not a TAI6 compressed file.\n";
+    if (!in || magic[0] != 'T' || magic[1] != 'A' || magic[2] != '1' || magic[3] != '0') {
+        std::cerr << "Error: not a TA10 file.\n";
         return EXIT_FAILURE;
     }
 
-    int model_order = static_cast<int>(static_cast<uint8_t>(in.get()));
-    if (!in || model_order < -1 || model_order > 16) {
-        std::cerr << "Error: invalid model order in header.\n";
-        return EXIT_FAILURE;
-    }
-
-    uint32_t k_raw = static_cast<uint8_t>(in.get());
-    if (!in) {
+    std::uint64_t original_size = 0;
+    std::uint32_t block_size   = 0;
+    std::uint32_t block_count  = 0;
+    if (!readUint64LE(in, original_size) ||
+        !readUint32LE(in, block_size)    ||
+        !readUint32LE(in, block_count)) {
         std::cerr << "Error: truncated header.\n";
         return EXIT_FAILURE;
     }
-    uint32_t k = (k_raw == 0u) ? 256u : k_raw;
+    if (original_size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        std::cerr << "Error: file too large for this platform.\n";
+        return EXIT_FAILURE;
+    }
+    if (block_size == 0) {
+        std::cerr << "Error: invalid block size in header.\n";
+        return EXIT_FAILURE;
+    }
 
-    std::vector<uint8_t> alphabet(k);
-    if (k < 256u) {
-        in.read(reinterpret_cast<char *>(alphabet.data()),
-                static_cast<std::streamsize>(k));
-        if (!in) {
-            std::cerr << "Error: truncated alphabet in header.\n";
+    const std::uint64_t expected_blocks =
+        original_size == 0 ? 0u : (original_size + block_size - 1) / block_size;
+    if (block_count != expected_blocks) {
+        std::cerr << "Error: inconsistent block count in header.\n";
+        return EXIT_FAILURE;
+    }
+
+    std::vector<std::uint32_t> primary_indices(block_count, 0);
+    for (std::uint32_t i = 0; i < block_count; ++i) {
+        if (!readUint32LE(in, primary_indices[i])) {
+            std::cerr << "Error: truncated primary indices.\n";
             return EXIT_FAILURE;
         }
-    } else {
-        for (uint32_t i = 0; i < 256u; i++)
-            alphabet[i] = static_cast<uint8_t>(i);
-    }
-
-    // primary_index: 4 bytes little-endian
-    uint32_t primary_index = 0;
-    for (int i = 0; i < 4; i++) {
-        int b = in.get();
-        if (!in) {
-            std::cerr << "Error: truncated primary_index in header.\n";
+        const std::uint64_t block_len =
+            std::min<std::uint64_t>(block_size, original_size - static_cast<std::uint64_t>(i) * block_size);
+        if (block_len > 0 && primary_indices[i] >= block_len) {
+            std::cerr << "Error: invalid primary index.\n";
             return EXIT_FAILURE;
         }
-        primary_index |= static_cast<uint32_t>(static_cast<uint8_t>(b)) << (i * 8);
     }
 
-    // NODE_LIMIT must use the same formula as the compressor.
-    std::size_t NODE_LIMIT;
-    {
-        std::size_t node_bytes = static_cast<std::size_t>(k + 1) * 12 + 80;
-        constexpr std::size_t TARGET = 6ULL * 1024 * 1024 * 1024;
-        NODE_LIMIT = std::min(TARGET / node_bytes, std::size_t(8'000'000));
-        NODE_LIMIT = std::max(NODE_LIMIT, std::size_t(2'000'000));
-    }
-
-    // ── Open output ───────────────────────────────────────────────────────────
+    // --- Open output ---
     std::ofstream file_out;
     if (argc == 3) {
         file_out.open(argv[2], std::ios::binary);
@@ -140,53 +122,40 @@ int main(int argc, char *argv[]) {
     }
     std::ostream &out = (argc == 3) ? static_cast<std::ostream &>(file_out) : std::cout;
 
-    // ── Decode interleaved (symbol, count) stream → BWT buffer ───────────────
-    std::vector<uint8_t> bwt_buf;
+    // --- Range-decode and invert BWT+MTF per block ---
     try {
-        PpmModel model(model_order, k + 1, k, NODE_LIMIT);
-        std::vector<std::uint32_t> exp_init(32, 1);
-        SimpleFrequencyTable exp_model(exp_init);
-        std::vector<std::uint32_t> bit_init(2, 1);
-        SimpleFrequencyTable bit_model(bit_init);
-        RangeDecoder dec(in);
-        std::deque<std::uint32_t> history;
+        RangeDecoder decoder(in);
+        std::uint64_t remaining = original_size;
 
-        while (true) {
-            std::uint32_t sym = decodeSymbol(dec, model, history);
-            if (sym == k)
-                break;  // EOF marker
+        for (std::uint32_t b = 0; b < block_count; ++b) {
+            const std::size_t block_len =
+                static_cast<std::size_t>(std::min<std::uint64_t>(block_size, remaining));
 
-            model.incrementContexts(history, sym);
-            if (model_order >= 1) {
-                if (history.size() >= static_cast<std::size_t>(model_order))
-                    history.pop_back();
-                history.push_front(sym);
+            // Decode bits into the BWT+MTF block using the same model as the compressor
+            ContextMixModel model;
+            std::vector<std::uint8_t> encoded_block(block_len, 0);
+            for (std::size_t i = 0; i < block_len; ++i) {
+                std::uint8_t byte = 0;
+                for (int bit = 7; bit >= 0; --bit) {
+                    const std::uint32_t prob1 = model.predict();
+                    BinaryFrequencyTable freqs(prob1);
+                    const std::uint32_t decoded = decoder.read(freqs);
+                    byte = static_cast<std::uint8_t>((byte << 1) | decoded);
+                    model.update(decoded);
+                }
+                encoded_block[i] = byte;
             }
 
-            // Elias-gamma decode for count
-            std::uint32_t b = dec.read(exp_model);
-            exp_model.increment(b);
-            std::uint32_t residual = 0;
-            for (std::uint32_t j = 0; j < b; j++)
-                residual = (residual << 1) | dec.read(bit_model);
-            std::uint32_t cnt = (1u << b) | residual;
-
-            uint8_t byte = alphabet[sym];
-            for (std::uint32_t j = 0; j < cnt; j++)
-                bwt_buf.push_back(byte);
+            // Invert MTF then BWT to recover original data
+            const auto original = bwt_inverse(mtf_inverse(encoded_block), primary_indices[b]);
+            out.write(reinterpret_cast<const char *>(original.data()),
+                      static_cast<std::streamsize>(original.size()));
+            remaining -= block_len;
         }
-
     } catch (const std::exception &e) {
         std::cerr << "Decoding error: " << e.what() << "\n";
         return EXIT_FAILURE;
     }
-
-    // ── BWT inverse → original data ───────────────────────────────────────────
-    std::vector<uint8_t> original = bwt_inverse(bwt_buf, primary_index);
-
-    // ── Write output ──────────────────────────────────────────────────────────
-    out.write(reinterpret_cast<const char *>(original.data()),
-              static_cast<std::streamsize>(original.size()));
 
     return EXIT_SUCCESS;
 }

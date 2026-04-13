@@ -220,6 +220,10 @@ bwt_inverse(const std::vector<uint8_t>& L, uint32_t primary_index)
     for (size_t j = N; j-- > 0;) {
         original[j] = L[pos];
         pos = LF[pos];
+        // Prefetch the LF entry we will need two iterations from now.
+        // The LF array is 4×N bytes (16 MB for a 4 MB block) — mostly in DRAM.
+        // Without prefetch each access stalls ~100 cycles waiting for DRAM.
+        __builtin_prefetch(&LF[LF[pos]], 0 /* read */, 0 /* no temporal locality */);
     }
     return original;
 }
