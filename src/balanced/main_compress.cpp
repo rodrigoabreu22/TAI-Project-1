@@ -11,7 +11,6 @@
  * MTF (Move-To-Front) converts the run-symbol stream to rank indices
  * heavily concentrated near 0 (BWT clusters identical symbols → same symbol
  * repeats → MTF rank is 0 almost always).  ORDER=0 codes this very cheaply.
- * This is the same principle as bzip2 (BWT + MTF + Huffman).
  *
  * Compressed file format
  * ──────────────────────
@@ -60,7 +59,7 @@
 // Uses FenwickFrequencyTable for O(log 256) getLow/getHigh/findSymbol per symbol.
 static std::vector<uint8_t> order0_encode(const std::vector<uint8_t>& data) {
     FenwickFrequencyTable model(256);
-    for (int i = 0; i < 256; i++) model.increment(i);  // uniform prior
+    for (int i = 0; i < 256; i++) model.increment(i);  
     std::ostringstream buf(std::ios::binary);
     RangeEncoder enc(buf);
     for (uint8_t b : data) {
@@ -76,7 +75,7 @@ static std::vector<uint8_t> order0_encode(const std::vector<uint8_t>& data) {
 // ── Per-chunk result ──────────────────────────────────────────────────────────
 struct ChunkResult {
     std::vector<uint8_t> bitstream;
-    uint8_t              k_raw;
+    uint8_t k_raw;
     std::vector<uint8_t> alphabet;
 };
 
@@ -89,7 +88,7 @@ static ChunkResult compress_chunk(
     bool seen[256] = {};
     for (auto& [sym, cnt] : runs) seen[sym] = true;
 
-    std::vector<uint8_t>      alphabet;
+    std::vector<uint8_t> alphabet;
     std::array<uint32_t, 256> encode_map{};
     for (int i = 0; i < 256; i++) {
         if (seen[i]) {
@@ -110,9 +109,8 @@ static ChunkResult compress_chunk(
     // ── Count models: direct adaptive model for small counts ─────────────────
     // Symbols 0..THRESH-1 represent counts 1..THRESH.
     // Symbol THRESH = "large" (count > THRESH) → followed by Elias-gamma.
-    // This approaches H(count) directly without singleton-flag overhead.
     constexpr uint32_t COUNT_CTXS = 4;
-    constexpr uint32_t THRESH = 8u;  // covers >99% of counts for all files
+    constexpr uint32_t THRESH = 8u;  
     auto rank_ctx = [](uint32_t r) -> uint32_t {
         if (r == 0) return 0;
         if (r == 1) return 1;
@@ -167,7 +165,7 @@ static ChunkResult compress_chunk(
     ChunkResult result;
     std::string s = buf.str();
     result.bitstream.assign(s.begin(), s.end());
-    result.k_raw    = (k == 256u) ? 0u : static_cast<uint8_t>(k);
+    result.k_raw = (k == 256u) ? 0u : static_cast<uint8_t>(k);
     result.alphabet = (k < 256u) ? alphabet : std::vector<uint8_t>{};
     return result;
 }
@@ -220,10 +218,8 @@ int main(int argc, char *argv[]) {
     uint32_t original_size = static_cast<uint32_t>(raw_data.size());
 
     // ── Single-pass: byte entropy + bigram MI pre-filter ─────────────────────
-    // Merged into one scan to avoid reading raw_data twice.
     // MI = 2*H(bytes) - H(bigrams): if MI < 0.45 bytes are near-independent
     // and BWT won't improve compression → use ORDER-0 directly.
-    // Measured: A=0.013, E=0.358 (skip BWT), F=0.536 (BWT helps).
     double H_bytes = 0.0;
     bool use_order0 = false;
     {
@@ -260,7 +256,7 @@ int main(int argc, char *argv[]) {
     }
 
     uint32_t primary_index = 0;
-    uint32_t num_chunks    = 0;
+    uint32_t num_chunks = 0;
     std::vector<ChunkResult> results;
     std::vector<uint8_t> order0_bs;
 
@@ -306,7 +302,7 @@ int main(int argc, char *argv[]) {
         std::vector<std::vector<std::pair<uint8_t, uint32_t>>> chunks(num_chunks);
         for (uint32_t i = 0; i < num_chunks; i++) {
             size_t start = i * runs_per_chunk;
-            size_t end   = std::min(start + runs_per_chunk, runs.size());
+            size_t end = std::min(start + runs_per_chunk, runs.size());
             if (start >= runs.size()) { num_chunks = i; break; }
             chunks[i].assign(runs.begin() + static_cast<std::ptrdiff_t>(start),
                              runs.begin() + static_cast<std::ptrdiff_t>(end));
@@ -318,8 +314,7 @@ int main(int argc, char *argv[]) {
         std::vector<std::future<ChunkResult>> futures;
         futures.reserve(num_chunks);
         for (uint32_t i = 0; i < num_chunks; i++)
-            futures.push_back(std::async(std::launch::async,
-                                         compress_chunk, chunks[i]));
+            futures.push_back(std::async(std::launch::async, compress_chunk, chunks[i]));
         results.reserve(num_chunks);
         for (auto &f : futures)
             results.push_back(f.get());
@@ -348,7 +343,7 @@ int main(int argc, char *argv[]) {
     if (use_order0) {
         // ── Write ORDER-0 output ──────────────────────────────────────────────
         // Header: mode=1 + original_size + bitstream_size
-        out.put(1);  // mode = ORDER-0
+        out.put(1);  
         write_u32le(out, original_size);
         write_u32le(out, static_cast<uint32_t>(order0_bs.size()));
         out.write(reinterpret_cast<const char *>(order0_bs.data()),
@@ -356,12 +351,13 @@ int main(int argc, char *argv[]) {
     } else {
         // ── Write BWT+MTF output ──────────────────────────────────────────────
         // Header: mode=0 + primary_index + num_chunks
-        out.put(0);  // mode = BWT+MTF
+        out.put(0);  
         write_u32le(out, primary_index);
         write_u32le(out, num_chunks);
         for (const auto &r : results) {
             write_u32le(out, static_cast<uint32_t>(r.bitstream.size()));
             out.put(static_cast<char>(r.k_raw));
+            
             if (r.k_raw != 0)
                 out.write(reinterpret_cast<const char *>(r.alphabet.data()),
                           static_cast<std::streamsize>(r.alphabet.size()));

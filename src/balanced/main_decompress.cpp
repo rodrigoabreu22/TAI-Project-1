@@ -23,13 +23,13 @@
 
 // ── Per-chunk data ────────────────────────────────────────────────────────────
 struct ChunkData {
-    uint32_t             k;
+    uint32_t k;
     std::vector<uint8_t> alphabet;
     std::vector<uint8_t> bitstream;
 };
 
 
-// ── Decode one chunk → portion of bwt_data (runs in a worker thread) ─────────
+// ── Decode one chunk -> portion of bwt_data (runs in a worker thread) ─────────
 static std::vector<uint8_t> decompress_chunk(const ChunkData &cd)
 {
     // MTF list: [0, 1, ..., k-1]
@@ -50,9 +50,9 @@ static std::vector<uint8_t> decompress_chunk(const ChunkData &cd)
     std::vector<uint32_t> cnt_init(THRESH + 1, 1u);
     std::vector<SimpleFrequencyTable> cnt_models(COUNT_CTXS, SimpleFrequencyTable(cnt_init));
     std::vector<uint32_t> exp_init(32, 1u);
-    SimpleFrequencyTable  exp_model(exp_init);
+    SimpleFrequencyTable exp_model(exp_init);
     std::vector<uint32_t> bit_init(2, 1u);
-    SimpleFrequencyTable  bit_model(bit_init);
+    SimpleFrequencyTable bit_model(bit_init);
 
     std::string raw(cd.bitstream.begin(), cd.bitstream.end());
     std::istringstream buf(raw, std::ios::binary);
@@ -99,10 +99,10 @@ static std::vector<uint8_t> decompress_chunk(const ChunkData &cd)
 
 // ── ORDER-0 adaptive range decoding of raw bytes ─────────────────────────────
 // Uses FenwickFrequencyTable for O(log 256) findSymbol per symbol.
-static std::vector<uint8_t> order0_decode(const std::vector<uint8_t>& bitstream,
-                                          uint32_t original_size) {
+static std::vector<uint8_t> order0_decode(const std::vector<uint8_t>& bitstream,uint32_t original_size) 
+{
     FenwickFrequencyTable model(256);
-    for (int i = 0; i < 256; i++) model.increment(i);  // uniform prior
+    for (int i = 0; i < 256; i++) model.increment(i);
     std::string raw(bitstream.begin(), bitstream.end());
     std::istringstream buf(raw, std::ios::binary);
     RangeDecoder dec(buf);

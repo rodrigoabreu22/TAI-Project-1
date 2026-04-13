@@ -1,15 +1,8 @@
-/*
- * TAI Project 1 — Fenwick-tree frequency table (implementation)
- */
-
 #include <stdexcept>
 #include "FenwickFrequencyTable.hpp"
 
 using std::uint32_t;
 using std::int32_t;
-
-
-// ── Constructor ──────────────────────────────────────────────────────────────
 
 FenwickFrequencyTable::FenwickFrequencyTable(uint32_t numSyms)
     : symbolLimit(numSyms),
@@ -23,9 +16,6 @@ FenwickFrequencyTable::FenwickFrequencyTable(uint32_t numSyms)
     while (highBit_ * 2u <= symbolLimit)
         highBit_ *= 2u;
 }
-
-
-// ── FrequencyTable interface ─────────────────────────────────────────────────
 
 uint32_t FenwickFrequencyTable::getSymbolLimit() const {
     return symbolLimit;
@@ -66,8 +56,6 @@ uint32_t FenwickFrequencyTable::getHigh(uint32_t symbol) const {
 }
 
 
-// ── Internal helpers ─────────────────────────────────────────────────────────
-
 // Add `delta` to 1-indexed Fenwick position `i` and propagate upward.
 // Uses signed int indices so that `x & -x` (lowest-set-bit) is well-defined.
 void FenwickFrequencyTable::update(uint32_t i, int32_t delta) {
@@ -94,8 +82,6 @@ void FenwickFrequencyTable::checkSymbol(uint32_t symbol) const {
 // The BIT stores prefix sums; we descend bit by bit from the highest bit,
 // greedily extending our position whenever the subtree sum fits within `rem`.
 // After the loop, `pos` equals the 0-indexed target symbol.
-//
-// Replaces the O(log^2 N) binary search in ArithmeticDecoder::read().
 uint32_t FenwickFrequencyTable::findSymbol(uint32_t value) const {
     uint32_t pos = 0;
     uint32_t rem = value;
@@ -106,5 +92,5 @@ uint32_t FenwickFrequencyTable::findSymbol(uint32_t value) const {
             rem -= tree[pos];
         }
     }
-    return pos;   // 0-indexed symbol
+    return pos;
 }

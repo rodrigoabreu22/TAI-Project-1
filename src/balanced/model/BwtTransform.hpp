@@ -9,12 +9,6 @@
  *   primary_index from the SA.
  *
  * Inverse: LF-mapping — O(N).
- *
- * Optimisations vs original:
- *   - Type array uses uint8_t instead of std::vector<bool> (avoids bit-packing
- *     overhead on random access in induceSA — direct byte loads instead).
- *   - getBuckets result reused across induceSA calls (4 fewer full-string scans
- *     per SA-IS level).
  */
 
 #include <algorithm>
@@ -36,21 +30,21 @@ inline void getBuckets(const std::vector<int32_t>& s,
     }
 }
 
-// Induce L-type (left→right) then S-type (right→left) entries into SA.
+// Induce L-type (left -> right) then S-type (right -> left) entries into SA.
 // Takes pre-computed bucket arrays to avoid recomputing them internally.
 inline void induceSA(const std::vector<int32_t>& s, std::vector<int32_t>& SA,
                      const std::vector<uint8_t>& t, int alpha,
                      std::vector<int32_t>& bkt) {
     int n = static_cast<int>(s.size());
 
-    // L-type: scan left→right; if SA[i]-1 is L-type, place it at bucket head
+    // L-type: scan left -> right; if SA[i]-1 is L-type, place it at bucket head
     getBuckets(s, bkt, alpha, false);
     for (int i = 0; i < n; i++) {
         if (SA[i] > 0 && !t[SA[i] - 1])
             SA[bkt[s[SA[i] - 1]]++] = SA[i] - 1;
     }
 
-    // S-type: scan right→left; if SA[i]-1 is S-type, place it at bucket tail
+    // S-type: scan right -> left; if SA[i]-1 is S-type, place it at bucket tail
     getBuckets(s, bkt, alpha, true);
     for (int i = n - 1; i >= 0; i--) {
         if (SA[i] > 0 && t[SA[i] - 1])
@@ -68,9 +62,8 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
     if (n == 1) { SA[0] = 0; return; }
 
     // ── Step 1: classify S/L types ───────────────────────────────────────────
-    // t[i] = 1 → S-type (suffix[i] < suffix[i+1])
-    // t[i] = 0 → L-type (suffix[i] > suffix[i+1])
-    // uint8_t avoids std::vector<bool> bit-packing overhead on random access.
+    // t[i] = 1 -> S-type (suffix[i] < suffix[i+1])
+    // t[i] = 0 -> L-type (suffix[i] > suffix[i+1])
     std::vector<uint8_t> t(n, 0);
     t[n - 1] = 1;  // sentinel is always S-type (smallest)
     for (int i = n - 2; i >= 0; i--)
@@ -79,7 +72,7 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
     // LMS (Left-Most S-type): S-type position whose left neighbour is L-type.
     auto isLMS = [&](int i) { return i > 0 && t[i] && !t[i - 1]; };
 
-    // Collect LMS positions in input order (needed later to map SA1 → original)
+    // Collect LMS positions in input order (needed later to map SA1 -> original)
     std::vector<int32_t> lmsPos;
     for (int i = 1; i < n; i++)
         if (isLMS(i)) lmsPos.push_back(i);
@@ -90,7 +83,7 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
 
     // ── Step 2: approximate SA via initial induced sort ──────────────────────
     {
-        getBuckets(s, bkt, alpha, true);  // tails
+        getBuckets(s, bkt, alpha, true); 
         // Place LMS suffixes at the tail of their character buckets
         for (int i = n1 - 1; i >= 0; i--)
             SA[bkt[s[lmsPos[i]]]--] = lmsPos[i];
@@ -98,7 +91,7 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
     induceSA(s, SA, t, alpha, bkt);
 
     // ── Step 3: name LMS substrings ──────────────────────────────────────────
-    // Two LMS substrings are equal iff they have the same sequence of
+    // Two LMS substrings are equal if they have the same sequence of
     // (character, type) pairs up to and including the next LMS position.
     std::vector<int32_t> name(n, -1);
     int32_t cur = -1, prev = -1;
@@ -129,9 +122,9 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
     std::vector<int32_t> SA1(n1);
     int alpha1 = cur + 1;
     if (alpha1 < n1) {
-        sais(s1, SA1, alpha1);  // recurse
+        sais(s1, SA1, alpha1); 
     } else {
-        // All LMS substrings are unique → SA1 is the inverse permutation of s1
+        // All LMS substrings are unique -> SA1 is the inverse permutation of s1
         for (int i = 0; i < n1; i++) SA1[s1[i]] = i;
     }
 
@@ -149,7 +142,7 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
     induceSA(s, SA, t, alpha, bkt);
 }
 
-} // namespace detail
+} 
 
 
 // ── Forward BWT ───────────────────────────────────────────────────────────────
@@ -161,9 +154,6 @@ inline void sais(const std::vector<int32_t>& s, std::vector<int32_t>& SA, int al
 // at positions 0..N-1 fully reproduce the cyclic rotation, so the suffix order
 // of positions 0..N-1 in T+T+'$' equals the cyclic rotation sort of T.
 //
-// Memory: 2*(N+1) ints for s, 2*(N+1) ints for SA → ~4*(2N+1) bytes overhead.
-// For N=12.5 MB: ~100 MB, well within the 8 GB limit.
-//
 // Returns (bwt_output, primary_index).
 inline std::pair<std::vector<uint8_t>, uint32_t>
 bwt_forward(const std::vector<uint8_t>& data)
@@ -172,14 +162,13 @@ bwt_forward(const std::vector<uint8_t>& data)
     if (N == 0) return {{}, 0};
     if (N == 1) return {{data[0]}, 0};
 
-    // Build T+T+'$': map bytes to 1-256, repeat twice, append sentinel 0.
-    // Length = 2N+1.
+    // Build T+T+'$': map bytes to 1-256, repeat twice, append sentinel 0. Length = 2N+1.
     std::vector<int32_t> s(2 * N + 1);
     for (size_t i = 0; i < N; i++) {
         s[i]     = static_cast<int32_t>(data[i]) + 1;
         s[N + i] = s[i];
     }
-    s[2 * N] = 0;  // unique sentinel
+    s[2 * N] = 0;
 
     // Build suffix array of length 2N+1
     std::vector<int32_t> SA;
