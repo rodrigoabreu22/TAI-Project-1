@@ -44,3 +44,19 @@ add_executable(decompress_fast
     src/fast/main_decompress.cpp ${FAST_SOURCES})
 target_include_directories(decompress_fast PRIVATE src/fast)
 target_link_libraries(decompress_fast PRIVATE Threads::Threads)
+
+# ── ratio ─────────────────────────────────────────────────────────────────────
+file(GLOB RATIO_SOURCES
+    src/ratio/coder/*.cpp
+    src/ratio/model/*.cpp
+)
+
+add_executable(compress_ratio
+    src/ratio/main_compress.cpp ${RATIO_SOURCES})
+target_include_directories(compress_ratio PRIVATE src/ratio)
+target_link_libraries(compress_ratio PRIVATE Threads::Threads)
+
+add_executable(decompress_ratio
+    src/ratio/main_decompress.cpp ${RATIO_SOURCES})
+target_include_directories(decompress_ratio PRIVATE src/ratio)
+target_link_libraries(decompress_ratio PRIVATE Threads::Threads)
