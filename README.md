@@ -7,7 +7,7 @@ Lossless data compression tool implementing a two-stage architecture: a custom *
 |------|----------|
 | `ox-balanced` | Best ratio within a tight time budget (BWT + MTF + adaptive range coder) |
 | `ox-ratio`    | Maximum compression ratio regardless of time |
-| `ox-speed`    | Minimum compression/decompression latency |
+| `ox-fast`    | Minimum compression/decompression latency |
 
 ## Authors
 
@@ -68,8 +68,13 @@ src/
     main_decompress.cpp
     model/               # BWT (SA-IS), RLE
     coder/               # Range coder, Fenwick frequency table
-  fast/                  # Speed-focused compressor 
-  ratio/                 # Ratio-focused compressor 
+  fast/                  # Speed-focused compressor
+    main_compress.cpp
+    main_decompress.cpp
+    coder/               # Range coder, frequency table
+    model/               # Fast ORDER-0 model
+    common/              # Shared format and parallel processor
+  ratio/                 # Ratio-focused compressor (coming soon)
 data/                    # Benchmark files A–H (gitignored)
 build/                   # Compiled binaries (gitignored)
 benchmarks.md            # Benchmark results
