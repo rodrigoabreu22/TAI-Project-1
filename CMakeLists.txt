@@ -29,3 +29,18 @@ add_executable(decompress_balanced
     src/balanced/main_decompress.cpp ${BALANCED_SOURCES})
 target_include_directories(decompress_balanced PRIVATE src/balanced)
 target_link_libraries(decompress_balanced PRIVATE Threads::Threads)
+
+# ── fast ──────────────────────────────────────────────────────────────────────
+file(GLOB FAST_SOURCES
+    src/fast/coder/*.cpp
+)
+
+add_executable(compress_fast
+    src/fast/main_compress.cpp ${FAST_SOURCES})
+target_include_directories(compress_fast PRIVATE src/fast)
+target_link_libraries(compress_fast PRIVATE Threads::Threads)
+
+add_executable(decompress_fast
+    src/fast/main_decompress.cpp ${FAST_SOURCES})
+target_include_directories(decompress_fast PRIVATE src/fast)
+target_link_libraries(decompress_fast PRIVATE Threads::Threads)
