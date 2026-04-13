@@ -36,7 +36,7 @@ DATA_DIR="data"
 FILES_ARG="A,B,C,D,E,F,G,H"
 CONCAT_MODE=false
 MULTI_MODE=false
-OWN_TOOL=""
+OWN_TOOLS=()
 RUNS=1
 QUIET=false
 
@@ -55,7 +55,7 @@ while getopts "d:f:cmo:r:qh" opt; do
         f) FILES_ARG="$OPTARG" ;;
         c) CONCAT_MODE=true ;;
         m) MULTI_MODE=true ;;
-        o) OWN_TOOL="$OPTARG" ;;
+        o) OWN_TOOLS+=("$OPTARG") ;;
         r) RUNS="$OPTARG" ;;
         q) QUIET=true ;;
         h) sed -n '2,32p' "$0"; exit 0 ;;
@@ -93,11 +93,11 @@ add_compressor "zstd-1"   "zstd -1 -q -c"        "zstd -d -q -c"
 add_compressor "zstd-3"   "zstd -3 -q -c"        "zstd -d -q -c"
 add_compressor "zstd-19"  "zstd -19 -q -c"       "zstd -d -q -c"
 
-# Append user's own tool if provided
-if [[ -n "$OWN_TOOL" ]]; then
+# Append user's own tools if provided
+for OWN_TOOL in "${OWN_TOOLS[@]}"; do
     IFS=':' read -r own_name own_comp own_decomp <<< "$OWN_TOOL"
     add_compressor "$own_name" "$own_comp" "$own_decomp"
-fi
+done
 
 # ---------- helpers ----------------------------------------------------------
 # All floating-point formatting goes through awk with OFMT to stay locale-safe.
